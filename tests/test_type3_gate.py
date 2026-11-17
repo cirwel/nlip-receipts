@@ -440,3 +440,116 @@ def test_multi_harness_adapters_claude_codex_agy(test_env):
         }
     )
     assert a_pub["status"] == "EXECUTED"
+
+
+def test_same_profile_cross_destination_substitution_blocked(test_env):
+    """Regression test: Even if 'prod' shares the exact same profile_id ('unit') and command as 'staging',
+    a receipt issued for destination='staging' is rejected when publishing to destination='prod'.
+    """
+    ext: Type3ReceiptExtension = test_env["ext"]
+    ext.ledger.set_policy(
+        repo_id="payments-service",
+        destination="prod",
+        profile_id="unit",
+        command=[sys.executable, "test_ok.py"],
+        allowed_callers=["agent-claude"],
+    )
+    _, rec_staging = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        )
+    )
+    assert rec_staging is not None
+    dec_cross_dest, _ = ext.handle_proposal(
+        ToolCallProposal(
+            operation="publish",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="prod",
+            profile_id="unit",
+            receipt_id=rec_staging.receipt_id,
+            caller_id="agent-claude",
+        )
+    )
+    assert dec_cross_dest.action == "deny"
+    assert dec_cross_dest.reason_code == "PROFILE_OR_REPO_MISMATCH"
+
+
+def test_conflicting_duplicate_auth_token_submessages_rejected(test_env):
+    """Regression test: An NLIP_Message carrying two conflicting auth token submessages is rejected."""
+    from nlip_sdk.nlip import NLIP_SubMessage
+
+    app = create_nlip_receipt_server(test_env["ext"])
+    client = TestClient(app)
+
+    msg = pack_tool_call_message(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+        ),
+        auth_token="agent-lowpriv:tok1",
+    )
+    msg.add_submessage(
+        NLIP_SubMessage(
+            format=AllowedFormats.token,
+            subformat="authentication",
+            content="agent-claude:tok2",
+        )
+    )
+    rsp = client.post("/nlip/", json=msg.to_dict())
+    assert rsp.status_code == 200
+    dec, _ = extract_decision_from_response(NLIP_Message(**rsp.json()))
+    assert dec.action == "deny"
+    assert dec.reason_code == "MALFORMED_NLIP_TOOL_CALL"
+
+
+def test_concurrent_single_use_receipt_consumption_is_atomic(test_env):
+    """Regression test: Under 8 concurrent publish requests racing on the same single-use receipt,
+    exactly 1 succeeds and 7 are denied with RECEIPT_ALREADY_CONSUMED.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    ext: Type3ReceiptExtension = test_env["ext"]
+    _, rec = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        )
+    )
+    assert rec is not None
+
+    def _attempt(i: int):
+        dec, _ = ext.handle_proposal(
+            ToolCallProposal(
+                operation="publish",
+                repo_id="payments-service",
+                artifact_ref="HEAD",
+                destination="staging",
+                branch=f"race-{i}",
+                profile_id="unit",
+                receipt_id=rec.receipt_id,
+                caller_id="agent-claude",
+            )
+        )
+        return dec.action, dec.reason_code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(_attempt, range(8)))
+
+    allows = [o for o in outcomes if o[0] == "allow"]
+    denies = [o for o in outcomes if o[0] == "deny" and o[1] == "RECEIPT_ALREADY_CONSUMED"]
+    assert len(allows) == 1
+    assert len(denies) == 7
+

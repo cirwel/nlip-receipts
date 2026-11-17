@@ -38,6 +38,7 @@ _DDL = (
         issuer_id TEXT NOT NULL,
         caller_id TEXT NOT NULL,
         repo_id TEXT NOT NULL,
+        destination TEXT NOT NULL,
         commit_oid TEXT NOT NULL,
         tree_oid TEXT NOT NULL,
         profile_id TEXT NOT NULL,
@@ -54,7 +55,7 @@ _DDL = (
         hmac_tag TEXT NOT NULL
     )""",
     """CREATE INDEX IF NOT EXISTS idx_receipts_repo_tree
-       ON receipts (repo_id, tree_oid, profile_id, issued_at)""",
+       ON receipts (repo_id, destination, tree_oid, profile_id, issued_at)""",
     """CREATE TABLE IF NOT EXISTS decisions (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         decision_id TEXT NOT NULL,
@@ -108,9 +109,9 @@ class ReceiptLedger:
     def _compute_receipt_hmac(self, rec: VerificationReceipt) -> str:
         canonical = (
             f"{rec.receipt_id}|{rec.issuer_id}|{rec.caller_id}|{rec.repo_id}|"
-            f"{rec.commit_oid}|{rec.tree_oid}|{rec.profile_id}|{rec.command_sha256}|"
-            f"{rec.env_fingerprint}|{rec.status}|{rec.exit_code}|{rec.policy_epoch}|"
-            f"{rec.issued_at:.6f}|{rec.expires_at:.6f}"
+            f"{rec.destination}|{rec.commit_oid}|{rec.tree_oid}|{rec.profile_id}|"
+            f"{rec.command_sha256}|{rec.env_fingerprint}|{rec.status}|{rec.exit_code}|"
+            f"{rec.policy_epoch}|{rec.issued_at:.6f}|{rec.expires_at:.6f}"
         ).encode("utf-8")
         return hmac.new(self._hmac_key, canonical, hashlib.sha256).hexdigest()
 
@@ -198,6 +199,7 @@ class ReceiptLedger:
         *,
         caller_id: str,
         repo_id: str,
+        destination: str = "origin",
         commit_oid: str,
         tree_oid: str,
         profile_id: str,
@@ -217,6 +219,7 @@ class ReceiptLedger:
             issuer_id=self.issuer_id(),
             caller_id=caller_id,
             repo_id=repo_id,
+            destination=destination,
             commit_oid=commit_oid,
             tree_oid=tree_oid,
             profile_id=profile_id,
@@ -235,16 +238,17 @@ class ReceiptLedger:
         with self._lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 """INSERT INTO receipts (
-                    receipt_id, issuer_id, caller_id, repo_id, commit_oid, tree_oid,
+                    receipt_id, issuer_id, caller_id, repo_id, destination, commit_oid, tree_oid,
                     profile_id, command_sha256, env_fingerprint, status, exit_code,
                     duration_ms, output_sha256, policy_epoch, issued_at, expires_at,
                     consumed, hmac_tag
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     rec.receipt_id,
                     rec.issuer_id,
                     rec.caller_id,
                     rec.repo_id,
+                    rec.destination,
                     rec.commit_oid,
                     rec.tree_oid,
                     rec.profile_id,
@@ -269,6 +273,7 @@ class ReceiptLedger:
             issuer_id=row["issuer_id"],
             caller_id=row["caller_id"],
             repo_id=row["repo_id"],
+            destination=row["destination"],
             commit_oid=row["commit_oid"],
             tree_oid=row["tree_oid"],
             profile_id=row["profile_id"],

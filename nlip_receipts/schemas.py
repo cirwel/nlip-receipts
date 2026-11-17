@@ -49,6 +49,7 @@ class VerificationReceipt(BaseModel):
     issuer_id: str
     caller_id: str
     repo_id: str
+    destination: str = "origin"
     commit_oid: str
     tree_oid: str
     profile_id: str
@@ -89,8 +90,11 @@ def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
     """Extract caller identity from ECMA-430 authentication/authorization token submessages
     and return a sanitized copy of the NLIP_Message with credential submessages stripped
     (ECMA-434 §7.2.1 / §7.2.3 / security_guidelines §3.3 & §3.5).
+
+    Raises ValueError if multiple conflicting authentication/authorization token submessages
+    are present (preventing token-pollution / parameter-spoofing attacks).
     """
-    caller_id = "anonymous"
+    seen_callers: list[str] = []
     kept_submessages: list[NLIP_SubMessage] = []
 
     for sub in msg.submessages or []:
@@ -99,17 +103,22 @@ def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
         if fmt == "token" and (
             subfmt.startswith("authentication") or subfmt.startswith("authorization")
         ):
+            parsed = "anonymous"
             if isinstance(sub.content, str) and sub.content.strip():
                 raw = sub.content.strip()
-                if ":" in raw:
-                    caller_id = raw.split(":", 1)[0].strip()
-                else:
-                    caller_id = raw
+                parsed = raw.split(":", 1)[0].strip() if ":" in raw else raw
             elif "_" in subfmt:
-                caller_id = subfmt.split("_", 1)[1].strip() or caller_id
+                parsed = subfmt.split("_", 1)[1].strip() or "anonymous"
+            seen_callers.append(parsed)
             # Strip credential submessage so it is not forwarded to downstream tools/LLMs
             continue
         kept_submessages.append(sub)
+
+    if len(set(seen_callers)) > 1:
+        raise ValueError(
+            f"Conflicting authentication token submessages in NLIP_Message: {seen_callers}"
+        )
+    caller_id = seen_callers[0] if seen_callers else "anonymous"
 
     sanitized = NLIP_Message(
         messagetype=msg.messagetype,

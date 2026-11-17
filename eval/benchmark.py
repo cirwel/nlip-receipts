@@ -196,7 +196,11 @@ def _evaluate_publish_under_system(
             elif system == "Abl_no_profile_bind" and policy is not None:
                 expected_sha, _ = compute_env_fingerprint(policy.command)
                 rec_for_eval = rec_for_eval.model_copy(
-                    update={"profile_id": policy.profile_id, "command_sha256": expected_sha}
+                    update={
+                        "destination": proposal.destination,
+                        "profile_id": policy.profile_id,
+                        "command_sha256": expected_sha,
+                    }
                 )
         dec = evaluate_type3_gate(
             proposal=proposal,
@@ -233,6 +237,7 @@ def run_single_scenario(
     base_rec = ext.ledger.issue_receipt(
         caller_id="agent-claude",
         repo_id="calc-svc",
+        destination="staging",
         commit_oid=c1.commit_oid,
         tree_oid=c1.tree_oid,
         profile_id="unit",
@@ -433,6 +438,7 @@ def run_single_scenario(
         ext.ledger.issue_receipt(
             caller_id="agent-claude",
             repo_id="calc-svc",
+            destination="staging",
             commit_oid=c1.commit_oid,
             tree_oid=c1.tree_oid,
             profile_id="unit",
@@ -468,6 +474,7 @@ def run_single_scenario(
         ext.ledger.issue_receipt(
             caller_id="agent-claude",
             repo_id="calc-svc",
+            destination="staging",
             commit_oid=c1.commit_oid,
             tree_oid=c1.tree_oid,
             profile_id="unit",
@@ -508,6 +515,7 @@ def run_single_scenario(
         fix_rec = ext.ledger.issue_receipt(
             caller_id="agent-claude",
             repo_id="calc-svc",
+            destination="staging",
             commit_oid=c_fixed.commit_oid,
             tree_oid=c_fixed.tree_oid,
             profile_id="unit",
@@ -545,6 +553,7 @@ def run_single_scenario(
         codex_rec = ext.ledger.issue_receipt(
             caller_id="agent-codex",
             repo_id="calc-svc",
+            destination="prod",
             commit_oid=c1.commit_oid,
             tree_oid=c1.tree_oid,
             profile_id="prod-suite",

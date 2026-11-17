@@ -64,7 +64,7 @@ python3 -m venv .venv
 
 ### Run Unit & Integration Tests (`make test`)
 ```bash
-make test
+make test   # 9/9 pytest suites (HTTP, TOCTOU, Confused-Deputy, Cross-Destination, Duplicate-Auth, 8-Thread Race, 3 Adapters)
 ```
 
 ### Run End-to-End Interactive Demo (`make demo`)
@@ -75,8 +75,9 @@ make demo
 ### Reproduce Full Evaluation Benchmark & Ablations (`make eval`)
 ```bash
 make eval
+PYTHONPATH=. .venv/bin/python eval/live_agent_eval.py   # Optional: live LLM IPI evaluation (requires local Ollama)
 ```
-Outputs machine-readable metrics to [`eval/results/evaluation_summary.json`](eval/results/evaluation_summary.json) and formatted tables to [`eval/results/evaluation_report.md`](eval/results/evaluation_report.md).
+Outputs machine-readable metrics to [`eval/results/evaluation_summary.json`](eval/results/evaluation_summary.json), [`eval/results/live_agent_traces.json`](eval/results/live_agent_traces.json), and formatted tables to [`eval/results/evaluation_report.md`](eval/results/evaluation_report.md).
 
 ---
 

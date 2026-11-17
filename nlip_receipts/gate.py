@@ -130,10 +130,11 @@ def evaluate_type3_gate(
             **base_kwargs,
         )
 
-    # 6. Verify repository, profile, and command digest binding (blocks destination substitution)
+    # 6. Verify repository, destination, profile, and command digest binding (blocks destination substitution)
     expected_cmd_sha, _ = compute_env_fingerprint(policy.command)
     if (
         receipt.repo_id != proposal.repo_id
+        or receipt.destination != proposal.destination
         or receipt.profile_id != policy.profile_id
         or receipt.command_sha256 != expected_cmd_sha
     ):
@@ -141,8 +142,9 @@ def evaluate_type3_gate(
             action="deny",
             reason_code="PROFILE_OR_REPO_MISMATCH",
             message=(
-                f"[NLIP-SE Type-3] Denied publish: receipt '{receipt.receipt_id}' does not match "
-                f"required verification profile '{policy.profile_id}' for destination '{proposal.destination}'."
+                f"[NLIP-SE Type-3] Denied publish: receipt '{receipt.receipt_id}' (dest='{receipt.destination}', "
+                f"profile='{receipt.profile_id}') does not match target destination='{proposal.destination}', "
+                f"profile='{policy.profile_id}'."
             ),
             sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.3.2", "ECMA-434:7.3.4"],
             **base_kwargs,
@@ -341,6 +343,7 @@ class Type3ReceiptExtension:
             receipt = self.ledger.issue_receipt(
                 caller_id=proposal.caller_id,
                 repo_id=proposal.repo_id,
+                destination=proposal.destination,
                 commit_oid=artifact.commit_oid,
                 tree_oid=artifact.tree_oid,
                 profile_id=policy.profile_id,
