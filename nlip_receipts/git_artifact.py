@@ -49,6 +49,7 @@ def _safe_git_env() -> dict[str, str]:
         GIT_NO_LAZY_FETCH="1",
         GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_ATTR_NOSYSTEM="1",
         LC_ALL="C",
     )
     return env
@@ -62,6 +63,8 @@ def run_git(repo_path: str, *args: str, timeout: float = 5.0) -> bytes:
         "core.fsmonitor=false",
         "-c",
         f"core.hooksPath={os.devnull}",
+        "-c",
+        f"core.attributesFile={os.devnull}",
         "-c",
         "protocol.allow=never",
         "-c",
@@ -152,6 +155,8 @@ def list_tree_manifest(repo_path: str, tree_oid: str, timeout: float = 5.0) -> d
         rel_path = os.fsdecode(raw_path)
         if mode == "160000" or kind == "commit":
             raise ArtifactError(f"submodules/gitlinks are not permitted in verified trees: {rel_path}")
+        if mode == "120000":
+            raise ArtifactError(f"symlinks are not permitted in verified trees: {rel_path}")
         manifest[rel_path] = (mode, oid)
     return manifest
 
@@ -177,22 +182,36 @@ def export_isolated_snapshot(
     operator-pinned test file SHA-256 digests (`pinned_file_sha256`).
     """
     manifest = list_tree_manifest(repo_path, tree_oid, timeout=timeout)
-    # --worktree-attributes prevents in-tree .gitattributes from applying export-ignore/export-subst
     tar_bytes = run_git(
-        repo_path, "archive", "--format=tar", "--worktree-attributes", tree_oid, timeout=timeout
+        repo_path, "archive", "--format=tar", tree_oid, timeout=timeout
     )
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tf:
-        tf.extractall(path=snapshot_dir, filter="data")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tf:
+            tf.extractall(path=snapshot_dir, filter="data")
+    except (tarfile.TarError, OSError) as exc:
+        raise ArtifactError(f"failed to extract archive snapshot: {exc}") from exc
 
-    # Verify every blob in `git ls-tree` exists in `snapshot_dir` with the exact git blob OID
+    # Verify exact 1-to-1 file set (no extra or missing files) and blob OID + executable mode match
+    extracted_files: set[str] = set()
+    for root_dir, _dirs, files in os.walk(snapshot_dir):
+        for fname in files:
+            full = os.path.join(root_dir, fname)
+            rel = os.path.relpath(full, snapshot_dir).replace(os.sep, "/")
+            extracted_files.add(rel)
+
+    if extracted_files != set(manifest.keys()):
+        missing = sorted(set(manifest.keys()) - extracted_files)
+        extra = sorted(extracted_files - set(manifest.keys()))
+        raise ArtifactError(
+            f"snapshot export 1-to-1 manifest mismatch: missing={missing[:5]}, extra={extra[:5]}"
+        )
+
     for rel_path, (mode, expected_oid) in manifest.items():
         full_path = os.path.join(snapshot_dir, rel_path)
-        if mode == "120000":
-            raise ArtifactError(f"symlinks are not permitted in verified trees: {rel_path}")
-        if not os.path.isfile(full_path):
-            raise ArtifactError(
-                f"snapshot export integrity failure (possible export-ignore): missing {rel_path!r}"
-            )
+        st = os.lstat(full_path)
+        is_exec = bool(st.st_mode & 0o100)
+        if (mode == "100755" and not is_exec) or (mode == "100644" and is_exec):
+            raise ArtifactError(f"snapshot file mode mismatch on {rel_path!r}: expected {mode}")
         with open(full_path, "rb") as f:
             content = f.read()
         obj_fmt = "sha256" if len(expected_oid) == 64 else "sha1"
@@ -204,9 +223,9 @@ def export_isolated_snapshot(
 
     if pinned_file_sha256:
         for rel_path, expected_sha256 in pinned_file_sha256.items():
+            if rel_path not in manifest:
+                raise ArtifactError(f"protected test file missing from tree manifest: {rel_path!r}")
             full_path = os.path.join(snapshot_dir, rel_path)
-            if not os.path.isfile(full_path):
-                raise ArtifactError(f"protected test file missing from tree: {rel_path!r}")
             with open(full_path, "rb") as f:
                 actual_sha256 = hashlib.sha256(f.read()).hexdigest()
             if actual_sha256 != expected_sha256:
@@ -299,6 +318,11 @@ def push_immutable_commit(
     """Push the exact verified `commit_oid` to `refs/heads/<branch>` in `dest_path`."""
     if not branch or "/" in branch or ".." in branch or branch.startswith("-"):
         raise ArtifactError(f"invalid target branch name: {branch!r}")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}([0-9a-fA-F]{24})?", commit_oid):
+        raise ArtifactError(f"invalid commit_oid format: {commit_oid!r}")
+    real_dest = os.path.realpath(dest_path)
+    if not os.path.isabs(real_dest) or not os.path.isdir(real_dest):
+        raise ArtifactError(f"destination repository does not exist: {dest_path!r}")
     refspec = f"{commit_oid}:refs/heads/{branch}"
     run_git(
         repo_path,
@@ -307,12 +331,12 @@ def push_immutable_commit(
         "--no-follow-tags",
         "--porcelain",
         "--",
-        dest_path,
+        real_dest,
         refspec,
         timeout=timeout,
     )
     pushed_head = (
-        run_git(dest_path, "rev-parse", "--verify", f"refs/heads/{branch}", timeout=timeout)
+        run_git(real_dest, "rev-parse", "--verify", f"refs/heads/{branch}", timeout=timeout)
         .decode()
         .strip()
     )

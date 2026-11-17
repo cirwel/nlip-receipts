@@ -671,4 +671,41 @@ def test_gitattributes_export_subst_and_pinned_test_tamper_blocked(test_env):
     assert rec_tamper is None
 
 
+def test_transactional_epoch_rotation_and_output_hmac_integrity(test_env):
+    """Regression test:
+    1) Mutating `output_sha256` on a stored receipt invalidates `verify_receipt_hmac`.
+    2) If `set_policy` rotates `policy_epoch` before `mark_consumed` runs, `mark_consumed`
+       re-reads the live `policies` table inside `BEGIN IMMEDIATE` and refuses consumption.
+    """
+    ext: Type3ReceiptExtension = test_env["ext"]
+    _, rec = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        ),
+        now=1000.0,
+    )
+    assert rec is not None
+
+    # 1. Tampering with output_sha256 fails HMAC verification
+    tampered = rec.model_copy(update={"output_sha256": "0" * 64})
+    assert ext.ledger.verify_receipt_hmac(tampered) is False
+
+    # 2. Rotate policy (epoch 1 -> 2), then attempt mark_consumed with stale expected_epoch=1
+    new_pol = ext.ledger.set_policy(
+        repo_id="payments-service",
+        destination="staging",
+        profile_id="unit",
+        command=[sys.executable, "test_ok.py"],
+        allowed_callers=["agent-claude"],
+    )
+    assert new_pol.policy_epoch == 2
+    assert ext.ledger.mark_consumed(rec.receipt_id, expected_epoch=1, now=1010.0) is False
+
+
+
 

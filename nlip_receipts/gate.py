@@ -479,7 +479,9 @@ class Type3ReceiptExtension:
                 )
             else:
                 if policy.single_use and not self.ledger.mark_consumed(
-                    stored_receipt.receipt_id, expected_epoch=policy.policy_epoch
+                    stored_receipt.receipt_id,
+                    expected_epoch=policy.policy_epoch,
+                    now=current_time,
                 ):
                     decision = Type3Decision(
                         action="deny",

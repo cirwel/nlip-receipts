@@ -125,6 +125,8 @@ class ReceiptLedger:
             rec.env_fingerprint,
             rec.status,
             str(rec.exit_code),
+            f"{rec.duration_ms:.3f}",
+            rec.output_sha256,
             str(rec.policy_epoch),
             f"{rec.issued_at:.6f}",
             f"{rec.expires_at:.6f}",
@@ -138,9 +140,8 @@ class ReceiptLedger:
 
     # ── Caller Credential Verification (ECMA-434 §7.2.1) ────────────────────
     def register_caller_secret(self, caller_id: str, secret: str) -> None:
-        tag = hmac.new(
-            self._hmac_key, f"caller:{caller_id}:{secret}".encode("utf-8"), hashlib.sha256
-        ).hexdigest()
+        msg = f"caller|{len(caller_id)}:{caller_id}|{len(secret)}:{secret}".encode("utf-8")
+        tag = hmac.new(self._hmac_key, msg, hashlib.sha256).hexdigest()
         with self._lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 """INSERT INTO caller_credentials (caller_id, secret_hmac)
@@ -162,9 +163,8 @@ class ReceiptLedger:
             return True
         if not secret:
             return False
-        candidate = hmac.new(
-            self._hmac_key, f"caller:{caller_id}:{secret}".encode("utf-8"), hashlib.sha256
-        ).hexdigest()
+        msg = f"caller|{len(caller_id)}:{caller_id}|{len(secret)}:{secret}".encode("utf-8")
+        candidate = hmac.new(self._hmac_key, msg, hashlib.sha256).hexdigest()
         return hmac.compare_digest(str(row["secret_hmac"]), candidate)
 
     # ── Policy Management ───────────────────────────────────────────────────
@@ -182,39 +182,42 @@ class ReceiptLedger:
     ) -> PolicyConfig:
         now = time.time()
         pinned = pinned_file_sha256 or {}
-        with self._lock, closing(self._connect()) as conn, conn:
-            existing = conn.execute(
-                "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
-                (repo_id, destination, profile_id),
-            ).fetchone()
-            next_epoch = (int(existing["policy_epoch"]) + 1) if existing else 1
-            conn.execute(
-                """INSERT INTO policies (
-                    repo_id, destination, profile_id, command_json, allowed_callers_json,
-                    pinned_files_json, ttl_seconds, single_use, policy_epoch, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
-                    command_json = excluded.command_json,
-                    allowed_callers_json = excluded.allowed_callers_json,
-                    pinned_files_json = excluded.pinned_files_json,
-                    ttl_seconds = excluded.ttl_seconds,
-                    single_use = excluded.single_use,
-                    policy_epoch = excluded.policy_epoch,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    repo_id,
-                    destination,
-                    profile_id,
-                    json.dumps(command),
-                    json.dumps(allowed_callers),
-                    json.dumps(pinned, sort_keys=True),
-                    float(ttl_seconds),
-                    1 if single_use else 0,
-                    next_epoch,
-                    now,
-                ),
-            )
+        with self._lock, closing(self._connect()) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    """INSERT INTO policies (
+                        repo_id, destination, profile_id, command_json, allowed_callers_json,
+                        pinned_files_json, ttl_seconds, single_use, policy_epoch, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
+                        command_json = excluded.command_json,
+                        allowed_callers_json = excluded.allowed_callers_json,
+                        pinned_files_json = excluded.pinned_files_json,
+                        ttl_seconds = excluded.ttl_seconds,
+                        single_use = excluded.single_use,
+                        policy_epoch = policies.policy_epoch + 1,
+                        updated_at = excluded.updated_at
+                    RETURNING policy_epoch
+                    """,
+                    (
+                        repo_id,
+                        destination,
+                        profile_id,
+                        json.dumps(command),
+                        json.dumps(allowed_callers),
+                        json.dumps(pinned, sort_keys=True),
+                        float(ttl_seconds),
+                        1 if single_use else 0,
+                        now,
+                    ),
+                ).fetchone()
+                next_epoch = int(row["policy_epoch"])
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
         return PolicyConfig(
             repo_id=repo_id,
             destination=destination,
@@ -368,14 +371,14 @@ class ReceiptLedger:
                 row = conn.execute(
                     """SELECT * FROM receipts
                        WHERE repo_id = ? AND destination = ? AND tree_oid = ? AND profile_id = ?
-                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                       ORDER BY rowid DESC LIMIT 1""",
                     (repo_id, destination, tree_oid, profile_id),
                 ).fetchone()
             else:
                 row = conn.execute(
                     """SELECT * FROM receipts
                        WHERE repo_id = ? AND tree_oid = ? AND profile_id = ?
-                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                       ORDER BY rowid DESC LIMIT 1""",
                     (repo_id, tree_oid, profile_id),
                 ).fetchone()
         return self._row_to_receipt(row) if row else None
@@ -385,10 +388,13 @@ class ReceiptLedger:
         receipt_id: str,
         *,
         expected_epoch: Optional[int] = None,
+        now: Optional[float] = None,
     ) -> bool:
-        """Atomically consume `receipt_id` inside an immediate transaction, re-verifying that
-        `consumed = 0`, `policy_epoch` has not rotated, and no newer failure superseded the tree.
+        """Atomically consume `receipt_id` inside an immediate transaction, re-verifying against
+        the live `policies` row that `policy_epoch` has not rotated, `status == 'passed'`,
+        `now <= expires_at`, `consumed = 0`, and no newer row (`rowid`) superseded the tree.
         """
+        current_time = now if now is not None else time.time()
         with self._lock, closing(self._connect()) as conn:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
@@ -397,16 +403,28 @@ class ReceiptLedger:
                     "SELECT rowid, * FROM receipts WHERE receipt_id = ?",
                     (receipt_id,),
                 ).fetchone()
-                if not row or int(row["consumed"]) != 0:
+                if (
+                    not row
+                    or int(row["consumed"]) != 0
+                    or row["status"] != "passed"
+                    or current_time > float(row["expires_at"])
+                ):
                     conn.execute("ROLLBACK")
                     return False
-                if expected_epoch is not None and int(row["policy_epoch"]) != int(expected_epoch):
+                pol_row = conn.execute(
+                    "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                    (row["repo_id"], row["destination"], row["profile_id"]),
+                ).fetchone()
+                if not pol_row or int(row["policy_epoch"]) != int(pol_row["policy_epoch"]):
+                    conn.execute("ROLLBACK")
+                    return False
+                if expected_epoch is not None and int(pol_row["policy_epoch"]) != int(expected_epoch):
                     conn.execute("ROLLBACK")
                     return False
                 latest = conn.execute(
                     """SELECT status FROM receipts
                        WHERE repo_id = ? AND destination = ? AND tree_oid = ? AND profile_id = ?
-                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                       ORDER BY rowid DESC LIMIT 1""",
                     (row["repo_id"], row["destination"], row["tree_oid"], row["profile_id"]),
                 ).fetchone()
                 if latest and latest["status"] != "passed":
@@ -425,28 +443,19 @@ class ReceiptLedger:
     # ── Audit Log (ECMA-434 §7.2.4) ─────────────────────────────────────────
     def record_decision(self, decision: Type3Decision) -> str:
         now = time.time()
-        with self._lock, closing(self._connect()) as conn, conn:
-            last = conn.execute(
-                "SELECT entry_hash FROM decisions ORDER BY seq DESC LIMIT 1"
-            ).fetchone()
-            prev_hash = str(last["entry_hash"]) if last else ("0" * 64)
-            sco_json = json.dumps(decision.sco_refs)
-            payload = (
-                f"{prev_hash}|{decision.decision_id}|{now:.6f}|{decision.action}|"
-                f"{decision.reason_code}|{decision.operation}|{decision.repo_id}|"
-                f"{decision.caller_id}|{decision.destination}|{decision.commit_oid}|"
-                f"{decision.tree_oid}|{decision.receipt_id or ''}|{sco_json}"
-            ).encode("utf-8")
-            entry_hash = hashlib.sha256(payload).hexdigest()
-            conn.execute(
-                """INSERT INTO decisions (
-                    decision_id, recorded_at, action, reason_code, operation,
-                    repo_id, caller_id, destination, commit_oid, tree_oid,
-                    receipt_id, sco_refs_json, latency_ms, prev_hash, entry_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
+        with self._lock, closing(self._connect()) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                last = conn.execute(
+                    "SELECT entry_hash FROM decisions ORDER BY seq DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = str(last["entry_hash"]) if last else ("0" * 64)
+                sco_json = json.dumps(decision.sco_refs)
+                fields = [
+                    prev_hash,
                     decision.decision_id,
-                    now,
+                    f"{now:.6f}",
                     decision.action,
                     decision.reason_code,
                     decision.operation,
@@ -455,14 +464,41 @@ class ReceiptLedger:
                     decision.destination,
                     decision.commit_oid,
                     decision.tree_oid,
-                    decision.receipt_id,
+                    decision.receipt_id or "",
                     sco_json,
-                    decision.latency_ms,
-                    prev_hash,
-                    entry_hash,
-                ),
-            )
-            return entry_hash
+                    f"{decision.latency_ms:.3f}",
+                ]
+                payload = "|".join(f"{len(f)}:{f}" for f in fields).encode("utf-8")
+                entry_hash = hashlib.sha256(payload).hexdigest()
+                conn.execute(
+                    """INSERT INTO decisions (
+                        decision_id, recorded_at, action, reason_code, operation,
+                        repo_id, caller_id, destination, commit_oid, tree_oid,
+                        receipt_id, sco_refs_json, latency_ms, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        decision.decision_id,
+                        now,
+                        decision.action,
+                        decision.reason_code,
+                        decision.operation,
+                        decision.repo_id,
+                        decision.caller_id,
+                        decision.destination,
+                        decision.commit_oid,
+                        decision.tree_oid,
+                        decision.receipt_id,
+                        sco_json,
+                        decision.latency_ms,
+                        prev_hash,
+                        entry_hash,
+                    ),
+                )
+                conn.execute("COMMIT")
+                return entry_hash
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     def list_decisions(self, limit: int = 50) -> list[dict]:
         with self._lock, closing(self._connect()) as conn:
