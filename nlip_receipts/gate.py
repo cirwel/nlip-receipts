@@ -10,6 +10,7 @@ Satisfies the NDSS SafeOSE '27 Focus Area 3 Fit Test:
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import time
 from typing import Optional
@@ -17,7 +18,9 @@ from typing import Optional
 from nlip_sdk.nlip import NLIP_Message
 
 from .git_artifact import (
+    SANDBOX_MODES,
     ArtifactError,
+    SandboxUnavailable,
     compute_env_fingerprint,
     push_immutable_commit,
     resolve_commit_and_tree,
@@ -90,6 +93,18 @@ def evaluate_type3_gate(
                 f"for destination '{proposal.destination}'."
             ),
             sco_refs=["ECMA-434:7.2.1", "ECMA-434:7.2.2", "ECMA-434:7.2.3"],
+            **base_kwargs,
+        )
+
+    if not any(fnmatch.fnmatchcase(proposal.branch, pat) for pat in policy.allowed_branches):
+        return Type3Decision(
+            action="deny",
+            reason_code="BRANCH_NOT_ALLOWED",
+            message=(
+                f"[NLIP-SE Type-3] Denied publish: branch '{proposal.branch}' is not permitted by the "
+                f"policy for destination '{proposal.destination}'."
+            ),
+            sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.3.2"],
             **base_kwargs,
         )
 
@@ -275,13 +290,20 @@ class Type3ReceiptExtension:
         ledger: ReceiptLedger,
         repos: dict[str, str],
         destinations: dict[str, str],
+        *,
+        verify_sandbox: str = "required",
     ):
         """
         Args:
             ledger: SE-protected ReceiptLedger instance.
             repos: Mapping of logical `repo_id` -> local repository path.
             destinations: Mapping of logical `destination` -> server-controlled bare Git repo path.
+            verify_sandbox: `"required"` (default) runs `verify` commands under the host OS sandbox
+                and fails closed if none is usable; `"off"` runs untrusted code with SE privileges.
         """
+        if verify_sandbox not in SANDBOX_MODES:
+            raise ValueError(f"verify_sandbox must be one of {SANDBOX_MODES}, got {verify_sandbox!r}")
+        self.verify_sandbox = verify_sandbox
         self.ledger = ledger
         self.repos = {k: os.path.realpath(v) for k, v in repos.items()}
         self.destinations = {k: os.path.realpath(v) for k, v in destinations.items()}
@@ -391,11 +413,16 @@ class Type3ReceiptExtension:
                     artifact.tree_oid,
                     policy.command,
                     pinned_file_sha256=policy.pinned_file_sha256,
+                    sandbox=self.verify_sandbox,
                 )
             except ArtifactError as exc:
                 decision = Type3Decision(
                     action="deny",
-                    reason_code="SNAPSHOT_INTEGRITY_FAILED",
+                    reason_code=(
+                        "SANDBOX_UNAVAILABLE"
+                        if isinstance(exc, SandboxUnavailable)
+                        else "SNAPSHOT_INTEGRITY_FAILED"
+                    ),
                     message=f"[NLIP-SE Type-3] Denied verify: snapshot integrity or pinned-test check failed: {exc}",
                     sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
                     operation="verify",

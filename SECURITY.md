@@ -23,3 +23,21 @@ This repository conforms to the **Natural Language Interaction Protocol (NLIP)**
 - [x] No hard-coded secrets; HMAC ledger keys are ephemeral or operator-supplied at startup.
 - [x] Cryptography uses HMAC-SHA256 and SHA-256 content/output digests; production transport requires TLS 1.3 per ECMA-434 §7.1.1.
 - [x] Subprocess execution uses argument vectors (`shell=False` for Git operations) and isolated snapshot directories (`git archive`) with sanitized environments.
+
+## Threat Model and Limitations
+
+**Trusted:** the Security Extension process, its ledger file and HMAC key, the operator's policies, and the destination repositories. **Untrusted:** the agent, every NLIP message it sends, and the contents of the tree it asks to verify or publish.
+
+The gate is only meaningful if the agent's sole route to a destination is the SE's `publish` operation. An agent that holds its own push credentials or runs as the SE's OS user can bypass any tool-boundary gate.
+
+Defaults that this relies on:
+
+- **`verify` runs in an OS sandbox.** The verification command imports code from the untrusted tree. It runs under `sandbox-exec` (macOS) or `bwrap` (Linux), with no network access and no filesystem writes outside the temporary snapshot, so that code cannot push to a destination or rewrite the ledger. If no working sandbox is available, `verify` is denied with `SANDBOX_UNAVAILABLE`. `Type3ReceiptExtension(verify_sandbox="off")` disables this and is safe only inside equivalent external isolation (a separate container or OS user).
+- **Callers must authenticate.** `ReceiptLedger(strict_caller_auth=True)` is the default: a caller with no registered secret (`register_caller_secret`) is denied. With `strict_caller_auth=False`, the `caller_id` is taken as asserted, so binding a receipt to its caller (Confused-Deputy protection) becomes advisory.
+- **Publish targets are allowlisted.** A policy's `allowed_branches` (fnmatch globs, default `["main"]`) limits which branch `publish` may write in the destination.
+- **Ledger file access.** The ledger is created with mode `0600` and must be writable only by the SE's OS user. The receipt HMAC prevents anyone without the key from minting or altering a receipt. It does not protect the `consumed` flag, policy rows, or the decision chain against deletion or rollback by someone who can write the file.
+
+Known limitations:
+
+- **A receipt attests that the policy command exited 0 over that exact tree, not that the code is correct.** The test command imports the code under test, so that code can control the exit status (for example, `os._exit(0)` at import), even when the test files themselves are pinned with `pinned_file_sha256`. Pinning test files stops tests from being weakened; it does not stop the tested code from subverting them. Mitigations are outside this extension: a verifier whose result does not depend on the untrusted process's exit status, or human review of what is being published. `tests/test_verify_isolation.py::test_code_under_test_cannot_force_passing_exit` records this as an expected failure.
+- **The decision log is hash-chained, not signed.** Someone with write access to the ledger can rewrite the whole chain consistently. Export it to an append-only store if tamper evidence is required.

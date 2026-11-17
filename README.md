@@ -54,6 +54,7 @@ This project builds on the author's prior open-source Hermes plugin [`hermes-rec
 
 ### Prerequisites
 - Python 3.10+ (tested with Python 3.12) and `git`
+- An OS sandbox for `verify`: `sandbox-exec` (built into macOS) or `bwrap` (Linux: `apt install bubblewrap`). Without one, `verify` fails closed with `SANDBOX_UNAVAILABLE`; see [`SECURITY.md`](SECURITY.md#threat-model-and-limitations).
 
 ### Setup
 ```bash

@@ -16,6 +16,7 @@ import hashlib
 import io
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -29,6 +30,92 @@ _SAFE_REF_RE = re.compile(r"^(HEAD|[0-9a-fA-F]{7,64}|refs/[A-Za-z0-9._/-]+|[A-Za
 
 class ArtifactError(RuntimeError):
     """Raised when a Git repository or immutable artifact cannot be resolved, verified, or exported."""
+
+
+class SandboxUnavailable(ArtifactError):
+    """Raised when `verify` requires an OS sandbox and none is usable on this host."""
+
+
+# ── Verification sandbox ──────────────────────────────────────────────────────
+# `verify` executes code from the untrusted tree (the test command imports it). Without OS
+# isolation that code runs with the SE's own privileges and can push to destinations or rewrite
+# the ledger directly, bypassing the gate. The sandbox denies network access and every
+# filesystem write outside the snapshot directory.
+SANDBOX_MODES = ("required", "off")
+
+_DARWIN_PROFILE = """(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write*
+  (subpath {snap})
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (literal "/dev/dtracehelper")
+  (regex #"^/dev/fd/"))
+"""
+
+_sandbox_probe_cache: dict[str, bool] = {}
+
+
+def _sbpl_string(path: str) -> str:
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
+    """Wrap `command` in the host's OS sandbox, or return None if no backend is installed."""
+    snap = os.path.realpath(snap_dir)
+    if sys.platform == "darwin":
+        exe = shutil.which("sandbox-exec")
+        if exe:
+            return [exe, "-p", _DARWIN_PROFILE.format(snap=_sbpl_string(snap)), "--", *command]
+        return None
+    if sys.platform.startswith("linux"):
+        exe = shutil.which("bwrap")
+        if exe:
+            return [
+                exe,
+                "--ro-bind", "/", "/",
+                "--dev", "/dev",
+                "--proc", "/proc",
+                "--tmpfs", "/tmp",
+                "--bind", snap, snap,
+                "--unshare-all",
+                "--die-with-parent",
+                "--new-session",
+                "--chdir", snap,
+                "--",
+                *command,
+            ]
+    return None
+
+
+def sandbox_available() -> bool:
+    """Return True if the host sandbox backend exists and can actually start a process."""
+    key = sys.platform
+    if key not in _sandbox_probe_cache:
+        with tempfile.TemporaryDirectory(prefix="nlip-se-probe-") as probe_dir:
+            argv = _sandbox_argv(["/bin/sh", "-c", "exit 0"], probe_dir)
+            ok = False
+            if argv is not None:
+                try:
+                    ok = (
+                        subprocess.run(
+                            argv,
+                            cwd=probe_dir,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=10.0,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    ok = False
+            _sandbox_probe_cache[key] = ok
+    return _sandbox_probe_cache[key]
 
 
 @dataclass(frozen=True)
@@ -259,13 +346,27 @@ def run_verification_in_snapshot(
     *,
     pinned_file_sha256: dict[str, str] | None = None,
     timeout: float = 15.0,
+    sandbox: str = "required",
 ) -> tuple[int, float, str, str, str]:
     """Run `command` inside a manifest-verified isolated temporary snapshot of `tree_oid`.
+
+    With `sandbox="required"` (the default) the command runs under the host OS sandbox
+    (`sandbox-exec` on macOS, `bwrap` on Linux) with no network and no filesystem writes outside
+    the snapshot; if no working sandbox exists, `SandboxUnavailable` is raised (fail closed).
+    `sandbox="off"` runs the untrusted tree with the SE's own privileges and is only safe when the
+    caller provides equivalent isolation itself.
 
     Returns `(exit_code, duration_ms, output_sha256, command_sha256, env_fingerprint)`.
     """
     if not command or not all(isinstance(part, str) and part for part in command):
         raise ArtifactError("verification command must be a non-empty argument vector")
+    if sandbox not in SANDBOX_MODES:
+        raise ArtifactError(f"unknown sandbox mode: {sandbox!r}")
+    if sandbox == "required" and not sandbox_available():
+        raise SandboxUnavailable(
+            "no working OS sandbox (sandbox-exec on macOS, bwrap on Linux); refusing to run "
+            "untrusted verification code with Security Extension privileges"
+        )
 
     command_sha256, env_fingerprint = compute_env_fingerprint(command, pinned_file_sha256)
     with tempfile.TemporaryDirectory(prefix="nlip-se-verify-") as snap_dir:
@@ -285,9 +386,15 @@ def run_verification_in_snapshot(
             "GIT_CONFIG_GLOBAL": os.devnull,
             "LC_ALL": "C",
         }
+        argv = command
+        if sandbox == "required":
+            wrapped = _sandbox_argv(command, snap_dir)
+            if wrapped is None:
+                raise SandboxUnavailable("OS sandbox backend disappeared after probe")
+            argv = wrapped
         t0 = time.perf_counter()
         proc = subprocess.Popen(
-            command,
+            argv,
             cwd=snap_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -308,6 +415,12 @@ def run_verification_in_snapshot(
             proc.wait(timeout=2.0)
             exit_code = 124
             output_bytes = b"verification timed out"
+        finally:
+            # Reap anything the command left running in its session (backgrounded children).
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
         duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)
 
     output_sha256 = hashlib.sha256(output_bytes).hexdigest()

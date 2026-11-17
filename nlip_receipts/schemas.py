@@ -26,6 +26,8 @@ class PolicyConfig(BaseModel):
     ttl_seconds: float = 900.0
     single_use: bool = True
     allow_tree_equivalent_commits: bool = False
+    # Branch names (fnmatch globs) that `publish` may write in the destination. Default: main only.
+    allowed_branches: list[str] = Field(default_factory=lambda: ["main"])
     policy_epoch: int = 1
 
 

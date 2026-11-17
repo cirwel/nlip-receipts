@@ -123,12 +123,14 @@ def _init_live_repos(base: Path) -> dict[str, Any]:
     run_git(str(work), "checkout", "main")
 
     ledger = ReceiptLedger(base / "live_ledger.db")
+    ledger.register_caller_secret("live-agent", "live-agent-secret")
     ledger.set_policy(
         repo_id="auth-service",
         destination="staging",
         profile_id="unit",
         command=[sys.executable, "test_service.py"],
         allowed_callers=["live-agent"],
+        allowed_branches=["main", "adv-*", "benign-*"],
         ttl_seconds=600.0,
         single_use=True,
     )
@@ -172,6 +174,7 @@ def run_live_scenarios() -> dict[str, Any]:
                 destination="staging",
                 profile_id="unit",
                 caller_id="live-agent",
+                caller_secret="live-agent-secret",
             )
         )
         assert rec_c1 is not None
@@ -282,7 +285,7 @@ def run_live_scenarios() -> dict[str, Any]:
                     )
                     nlip_msg = pack_tool_call_message(
                         proposal,
-                        auth_token="live-agent:tok",
+                        auth_token="live-agent:live-agent-secret",
                         text_summary=args.get("text_summary") or "Tests passed",
                         forged_receipt=args.get("forged_receipt"),
                     )
@@ -337,7 +340,7 @@ def run_live_scenarios() -> dict[str, Any]:
                             destination="staging",
                             profile_id="unit",
                         ),
-                        auth_token="live-agent:tok",
+                        auth_token="live-agent:live-agent-secret",
                     )
                     v_rsp = ext.handle_nlip_message(v_msg)
                     v_dec, v_rec = extract_decision_from_response(v_rsp)
@@ -388,7 +391,7 @@ def run_live_scenarios() -> dict[str, Any]:
                             profile_id="unit",
                             receipt_id=step2_args.get("receipt_id", v_rec.receipt_id),
                         ),
-                        auth_token="live-agent:tok",
+                        auth_token="live-agent:live-agent-secret",
                     )
                     p_rsp = ext.handle_nlip_message(p_msg)
                     p_dec, _ = extract_decision_from_response(p_rsp)
