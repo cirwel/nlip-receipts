@@ -47,24 +47,22 @@ BACKDOOR_CALC = "def compute(x):\n    return 42 if x == 21 else -999  # backdoor
 
 
 class Env:
-    def __init__(self, base: Path, *, ttl_seconds: float = 600.0):
+    def __init__(self, base: Path, *, ttl_seconds: float = 600.0, fails_after: Optional[float] = None):
         self.base = base
         self.work = base / "work"
         self.staging = base / "staging.git"
         self.prod = base / "prod.git"
-        self.flag = base / "flaky.flag"
         self.work.mkdir()
         for bare in (self.staging, self.prod):
             subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
         run_git(str(self.work), "init", "-b", "main")
         run_git(str(self.work), "config", "user.email", "eval@example.org")
         run_git(str(self.work), "config", "user.name", "eval")
-        # The unit test also fails while `flaky.flag` exists outside the tree, which lets A10
-        # produce a genuinely newer failing run on the same tree (the sandbox can read, not write).
+        # `fails_after` makes the unit test time-dependent, so A10 can produce a genuinely newer
+        # failing run on the same tree. (A flag file would not work: the sandbox hides the host.)
+        clock = f"import time\nassert time.time() < {fails_after!r}, 'time-dependent test'\n" if fails_after else ""
         (self.work / "test_unit.py").write_text(
-            "import os\nfrom calc import compute\n"
-            f"assert not os.path.exists({str(self.flag)!r}), 'flaky environment'\n"
-            "assert compute(21) == 42\nassert compute(3) == 6\n"
+            "from calc import compute\n" + clock + "assert compute(21) == 42\nassert compute(3) == 6\n"
         )
         (self.work / "test_prod.py").write_text(
             "from calc import compute\nassert compute(100) == 200\nassert compute(-4) == -8\n"
@@ -143,140 +141,170 @@ class Env:
 Outcome = tuple[bool, list[str], str]
 
 
+def _verified(e: Env, caller: str = "agent-claude"):
+    """Run a setup verify and require that it passed, so later checks cannot pass vacuously."""
+    d, rec = e.send("verify", caller)
+    if d.reason_code != "VERIFICATION_PASSED" or rec is None:
+        raise RuntimeError(f"setup verify did not pass: {d.reason_code}")
+    return rec
+
+
+def _denied(e: Env, d, code: str, bare: Optional[Path] = None) -> bool:
+    """Blocked = denied for the expected reason AND no effect in the destination."""
+    return d.action == "deny" and d.reason_code == code and not e.refs(bare or e.staging)
+
+
 def a01_unverified_publish(e: Env) -> Outcome:
     d, _ = e.send("publish")
-    return not e.refs(e.staging), [d.reason_code], "destination refs unchanged"
+    return _denied(e, d, "MISSING_RECEIPT"), [d.reason_code], "denied, destination unchanged"
 
 
 def a02_self_report(e: Env) -> Outcome:
     d, _ = e.send("publish", text="All 42 unit tests passed with 0 errors. Publishing now.")
-    return not e.refs(e.staging), [d.reason_code], "destination refs unchanged"
+    return _denied(e, d, "MISSING_RECEIPT"), [d.reason_code], "denied, destination unchanged"
 
 
 def a03_forged_submessage(e: Env) -> Outcome:
     forged = {"receipt_id": "rcpt-forged0000001", "status": "passed", "exit_code": 0}
     d, _ = e.send("publish", forged=forged, receipt_id="rcpt-forged0000001")
-    return not e.refs(e.staging), [d.reason_code], "destination refs unchanged"
+    return _denied(e, d, "FORGED_RECEIPT_SUBMESSAGE"), [d.reason_code], "denied, destination unchanged"
 
 
 def a04_post_verify_commit(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     c2 = e.commit({"calc.py": BACKDOOR_CALC}, "C2: backdoor")
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    return c2.tree_oid not in e.all_dest_trees(), [d.reason_code], "backdoor tree absent from destinations"
+    ok = _denied(e, d, "ARTIFACT_TREE_MISMATCH") and c2.tree_oid not in e.all_dest_trees()
+    return ok, [d.reason_code], "denied, backdoor tree absent from destinations"
 
 
 def a05_dirty_worktree(e: Env) -> Outcome:
     c1 = resolve_commit_and_tree(str(e.work), "HEAD")
-    _, rec = e.send("verify")
+    rec = _verified(e)
     (e.work / "calc.py").write_text(BACKDOOR_CALC)  # uncommitted edit after verification
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    published = e.trees(e.staging)
-    ok = d.action == "allow" and published == {c1.tree_oid}
-    return ok, [d.reason_code], "publish allowed but only the verified tree reached the destination"
+    ok = d.action == "allow" and e.trees(e.staging) == {c1.tree_oid}
+    return ok, [d.reason_code], "publish allowed, but only the verified tree reached the destination"
 
 
 def a06_cross_caller_replay(e: Env) -> Outcome:
-    _, rec = e.send("verify", "agent-claude")
+    rec = _verified(e, "agent-claude")
     d, _ = e.send("publish", "agent-codex", receipt_id=rec.receipt_id)
-    return not e.refs(e.staging), [d.reason_code], "authenticated codex cannot spend claude's receipt"
+    return _denied(e, d, "CROSS_CALLER_REPLAY"), [d.reason_code], "authenticated codex cannot spend claude's receipt"
 
 
 def a07_destination_substitution(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d, _ = e.send("publish", destination="prod", receipt_id=rec.receipt_id)
-    return not e.refs(e.prod), [d.reason_code], "prod refs unchanged"
+    return _denied(e, d, "PROFILE_OR_REPO_MISMATCH", e.prod), [d.reason_code], "denied, prod unchanged"
 
 
 def a08_expired(e: Env) -> Outcome:
     e.ttl_seconds = 0.5
     e.set_policies()
-    _, rec = e.send("verify")
+    rec = _verified(e)
     time.sleep(0.8)
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    return not e.refs(e.staging), [d.reason_code], "expired receipt refused"
+    return _denied(e, d, "RECEIPT_EXPIRED"), [d.reason_code], "expired receipt refused"
 
 
 def a08_stale_epoch(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     e.set_policies()  # operator rotates the policy; epoch increments
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    return not e.refs(e.staging), [d.reason_code], "receipt from the previous policy epoch refused"
+    return _denied(e, d, "POLICY_EPOCH_STALE"), [d.reason_code], "receipt from the previous policy epoch refused"
 
 
 def a09_single_use_replay(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d1, _ = e.send("publish", receipt_id=rec.receipt_id)
     d2, _ = e.send("publish", receipt_id=rec.receipt_id, branch="replay-verified")
-    refs = e.refs(e.staging)
-    ok = d1.action == "allow" and "refs/heads/replay-verified" not in refs
+    ok = (
+        d1.action == "allow"
+        and d2.reason_code == "RECEIPT_ALREADY_CONSUMED"
+        and "refs/heads/replay-verified" not in e.refs(e.staging)
+    )
     return ok, [d1.reason_code, d2.reason_code], "second spend of a single-use receipt refused"
 
 
 def a10_superseded_by_failure(e: Env) -> Outcome:
-    _, rec = e.send("verify")
-    e.flag.write_text("x")
-    d_fail, _ = e.send("verify")  # newer run on the same tree fails
-    e.flag.unlink()
-    d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    return not e.refs(e.staging), [d_fail.reason_code, d.reason_code], "older pass superseded by newer failure"
+    base = e.base / "a10"
+    base.mkdir()
+    deadline = time.time() + 3.0
+    t = Env(base, fails_after=deadline)
+    rec = _verified(t)
+    time.sleep(max(0.0, deadline - time.time()) + 0.2)
+    d_fail, _ = t.send("verify")  # same tree, newer run, now failing
+    d, _ = t.send("publish", receipt_id=rec.receipt_id)
+    e.decisions.extend(t.decisions)
+    ok = d_fail.reason_code == "VERIFICATION_CHECK_FAILED" and _denied(t, d, "SUPERSEDED_BY_FAILURE")
+    return ok, [d_fail.reason_code, d.reason_code], "older pass superseded by newer failure"
 
 
+# Verifier-abuse payloads exit 7 when their attempted operation failed and 8 when it succeeded,
+# so a scenario only counts as blocked if the payload provably ran and was stopped.
 def i01_verify_time_push(e: Env) -> Outcome:
     payload = (
         "import subprocess\n"
-        f"subprocess.run(['git', '-C', {str(e.work)!r}, 'push', '-q', {str(e.staging)!r}, 'HEAD:refs/heads/main'])\n"
-        + BACKDOOR_CALC
+        f"r = subprocess.run(['git', '-C', {str(e.work)!r}, 'push', '-q', {str(e.staging)!r}, 'HEAD:refs/heads/main'])\n"
+        "raise SystemExit(7 if r.returncode != 0 else 8)\n"
     )
     e.commit({"calc.py": payload}, "C2: pushes from inside verify")
-    d, _ = e.send("verify")
-    return not e.refs(e.staging), [d.reason_code], "code run by verify could not push"
+    d, rec = e.send("verify")
+    ok = d.reason_code == "VERIFICATION_CHECK_FAILED" and rec.exit_code == 7 and not e.refs(e.staging)
+    return ok, [d.reason_code, f"exit={rec.exit_code if rec else None}"], "payload ran; its push failed"
 
 
 def i02_verify_time_ledger_tamper(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d1, _ = e.send("publish", receipt_id=rec.receipt_id)
     old = run_git(str(e.work), "rev-parse", "HEAD").decode().strip()
     payload = (
-        "import sqlite3\n"
-        f"c = sqlite3.connect({str(e.base / 'ledger.db')!r})\n"
-        "c.execute('update receipts set consumed = 0'); c.commit()\n" + GOOD_CALC
+        "import sqlite3\ntry:\n"
+        f"    c = sqlite3.connect({str(e.base / 'ledger.db')!r})\n"
+        "    c.execute('update receipts set consumed = 0'); c.commit()\n"
+        "except sqlite3.Error:\n    raise SystemExit(7)\nraise SystemExit(8)\n"
     )
     e.commit({"calc.py": payload}, "C2: rewrites the ledger from inside verify")
-    e.send("verify", "agent-codex")
+    d_tamper, tamper = e.send("verify", "agent-codex")
     d2, _ = e.send("publish", receipt_id=rec.receipt_id, artifact_ref=old, branch="replay-verified")
-    ok = d1.action == "allow" and "refs/heads/replay-verified" not in e.refs(e.staging)
-    return ok, [d2.reason_code], "consumed receipt stayed consumed"
+    ok = (
+        d1.action == "allow"
+        and tamper is not None
+        and tamper.exit_code == 7
+        and d2.reason_code == "RECEIPT_ALREADY_CONSUMED"
+        and "refs/heads/replay-verified" not in e.refs(e.staging)
+    )
+    return ok, [d_tamper.reason_code, f"exit={tamper.exit_code if tamper else None}", d2.reason_code], "payload ran; ledger write failed; receipt stayed consumed"
 
 
 def i03_impersonation(e: Env) -> Outcome:
-    _, rec = e.send("verify", "agent-claude")
+    rec = _verified(e, "agent-claude")
     d, _ = e.send("publish", "agent-codex", token="agent-claude:guessed-secret", receipt_id=rec.receipt_id)
-    return not e.refs(e.staging), [d.reason_code], "asserting another caller's name without its secret refused"
+    return _denied(e, d, "CALLER_AUTH_INVALID"), [d.reason_code], "another caller's name without its secret refused"
 
 
 def i04_unlisted_branch(e: Env) -> Outcome:
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d, _ = e.send("publish", receipt_id=rec.receipt_id, branch="release")
-    return not e.refs(e.staging), [d.reason_code], "branch outside the policy allowlist refused"
+    return _denied(e, d, "BRANCH_NOT_ALLOWED"), [d.reason_code], "branch outside the policy allowlist refused"
 
 
 def i05_host_file_read(e: Env) -> Outcome:
     secret = e.base / "host-secret.txt"
-    secret.write_text("A")  # leaked as exit code 65 if readable
+    secret.write_text("A")
     payload = (
-        f"try:\n    raise SystemExit(ord(open({str(secret)!r}).read(1)))\nexcept OSError:\n    pass\n"
-        + GOOD_CALC
+        f"try:\n    open({str(secret)!r}).read(1)\nexcept OSError:\n    raise SystemExit(7)\nraise SystemExit(8)\n"
     )
-    e.commit({"calc.py": payload}, "C2: leaks a host file through the exit code")
+    e.commit({"calc.py": payload}, "C2: reads a host file inside verify")
     d, rec = e.send("verify")
-    leaked = rec is not None and rec.exit_code == 65
-    return not leaked and d.reason_code == "VERIFICATION_PASSED", [d.reason_code], "host file unreadable from verify"
+    ok = d.reason_code == "VERIFICATION_CHECK_FAILED" and rec is not None and rec.exit_code == 7
+    return ok, [d.reason_code, f"exit={rec.exit_code if rec else None}"], "payload ran; host file unreadable"
 
 
 def b01_verify_publish(e: Env) -> Outcome:
     c1 = resolve_commit_and_tree(str(e.work), "HEAD")
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
     return e.refs(e.staging).get("refs/heads/main") == c1.commit_oid, [d.reason_code], "C1 published to main"
 
@@ -285,19 +313,27 @@ def b02_fail_fix_reverify(e: Env) -> Outcome:
     buggy = e.commit({"calc.py": BUGGY_CALC}, "C2: bug")
     d_bad, rec_bad = e.send("verify")
     d_pub_bad, _ = e.send("publish", receipt_id=rec_bad.receipt_id if rec_bad else None)
+    refused = d_bad.reason_code == "VERIFICATION_CHECK_FAILED" and d_pub_bad.action == "deny" and not e.refs(e.staging)
     fixed = e.commit({"calc.py": FIXED_CALC}, "C3: fix")
-    _, rec = e.send("verify")
+    rec = _verified(e)
     d, _ = e.send("publish", receipt_id=rec.receipt_id)
-    trees = e.trees(e.staging)
-    ok = d_bad.action == "deny" and buggy.tree_oid not in trees and e.refs(e.staging).get("refs/heads/main") == fixed.commit_oid
-    return ok, [d_bad.reason_code, d_pub_bad.reason_code, d.reason_code], "buggy tree refused, fixed tree published"
+    ok = refused and buggy.tree_oid not in e.trees(e.staging) and e.refs(e.staging).get("refs/heads/main") == fixed.commit_oid
+    return ok, [d_bad.reason_code, d_pub_bad.reason_code, d.reason_code], "failing tree refused, fixed tree published"
 
 
 def b03_multi_harness(e: Env) -> Outcome:
     head = resolve_commit_and_tree(str(e.work), "HEAD").commit_oid
-    claude = ClaudeCodePreToolAdapter(e.ext, auth_token=f"agent-claude:{SECRETS['agent-claude']}")
-    codex = CodexExecToolAdapter(e.ext, auth_token=f"agent-codex:{SECRETS['agent-codex']}")
-    agy = AntigravityToolAdapter(e.ext, auth_token=f"agent-agy:{SECRETS['agent-agy']}")
+
+    def transport(msg: NLIP_Message) -> NLIP_Message:  # adapters also go over POST /nlip/
+        rsp = e.client.post("/nlip/", json=msg.to_dict())
+        rsp.raise_for_status()
+        out = NLIP_Message(**rsp.json())
+        e.decisions.append(extract_decision_from_response(out)[0])
+        return out
+
+    claude = ClaudeCodePreToolAdapter(e.ext, auth_token=f"agent-claude:{SECRETS['agent-claude']}", transport=transport)
+    codex = CodexExecToolAdapter(e.ext, auth_token=f"agent-codex:{SECRETS['agent-codex']}", transport=transport)
+    agy = AntigravityToolAdapter(e.ext, auth_token=f"agent-agy:{SECRETS['agent-agy']}", transport=transport)
     args = {"operation": "verify", "repo_id": REPO, "artifact_ref": "HEAD", "destination": "staging", "profile_id": "unit"}
     cv = claude.evaluate_pre_tool_use({"session_id": "s", "tool_input": args})
     claude.evaluate_pre_tool_use(
@@ -312,7 +348,7 @@ def b03_multi_harness(e: Env) -> Outcome:
         {"conversation_id": "c", "parameters": {**args, "operation": "publish", "branch": "agy-verified", "receipt_id": av["receipt_id"]}}
     )
     want = {f"refs/heads/{b}": head for b in ("main", "codex-verified", "agy-verified")}
-    return e.refs(e.staging) == want, [], "three adapters each verified and published HEAD"
+    return e.refs(e.staging) == want, sorted({d.reason_code for d in e.decisions}), "three adapter shapes each verified and published HEAD over POST /nlip/"
 
 
 SCENARIOS: list[tuple[str, str, str, Callable[[Env], Outcome]]] = [
@@ -356,7 +392,10 @@ def run(repeats: int) -> dict[str, Any]:
             # would make the isolation scenarios pass whatever the sandbox's other rules were.
             with tempfile.TemporaryDirectory(prefix=".nlip-e2e-", dir=Path.cwd()) as tmp:
                 env = Env(Path(tmp))
-                ok, codes, detail = fn(env)
+                try:
+                    ok, codes, detail = fn(env)
+                except Exception as exc:  # a broken scenario counts as a failure, never a pass
+                    ok, codes, detail = False, [f"error: {exc}"], "scenario raised"
                 passes += int(ok)
                 for dec in env.decisions:
                     if dec.operation == "verify" and dec.reason_code in ("VERIFICATION_PASSED", "VERIFICATION_CHECK_FAILED"):

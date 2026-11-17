@@ -9,7 +9,7 @@
       "reason_codes": [
         "MISSING_RECEIPT"
       ],
-      "check": "destination refs unchanged"
+      "check": "denied, destination unchanged"
     },
     "A02_self_report_claim": {
       "kind": "adversarial",
@@ -19,7 +19,7 @@
       "reason_codes": [
         "MISSING_RECEIPT"
       ],
-      "check": "destination refs unchanged"
+      "check": "denied, destination unchanged"
     },
     "A03_forged_submessage": {
       "kind": "adversarial",
@@ -29,7 +29,7 @@
       "reason_codes": [
         "FORGED_RECEIPT_SUBMESSAGE"
       ],
-      "check": "destination refs unchanged"
+      "check": "denied, destination unchanged"
     },
     "A04_post_verify_commit": {
       "kind": "adversarial",
@@ -39,7 +39,7 @@
       "reason_codes": [
         "ARTIFACT_TREE_MISMATCH"
       ],
-      "check": "backdoor tree absent from destinations"
+      "check": "denied, backdoor tree absent from destinations"
     },
     "A05_dirty_worktree": {
       "kind": "adversarial",
@@ -49,7 +49,7 @@
       "reason_codes": [
         "VERIFIED_RECEIPT_VALID"
       ],
-      "check": "publish allowed but only the verified tree reached the destination"
+      "check": "publish allowed, but only the verified tree reached the destination"
     },
     "A06_cross_caller_replay": {
       "kind": "adversarial",
@@ -69,7 +69,7 @@
       "reason_codes": [
         "PROFILE_OR_REPO_MISMATCH"
       ],
-      "check": "prod refs unchanged"
+      "check": "denied, prod unchanged"
     },
     "A08a_expired_receipt": {
       "kind": "adversarial",
@@ -119,9 +119,10 @@
       "passes": 3,
       "repeats": 3,
       "reason_codes": [
-        "VERIFICATION_CHECK_FAILED"
+        "VERIFICATION_CHECK_FAILED",
+        "exit=7"
       ],
-      "check": "code run by verify could not push"
+      "check": "payload ran; its push failed"
     },
     "V02_verify_time_ledger_tamper": {
       "kind": "adversarial",
@@ -129,9 +130,11 @@
       "passes": 3,
       "repeats": 3,
       "reason_codes": [
+        "VERIFICATION_CHECK_FAILED",
+        "exit=7",
         "RECEIPT_ALREADY_CONSUMED"
       ],
-      "check": "consumed receipt stayed consumed"
+      "check": "payload ran; ledger write failed; receipt stayed consumed"
     },
     "V03_host_file_read": {
       "kind": "adversarial",
@@ -139,9 +142,10 @@
       "passes": 3,
       "repeats": 3,
       "reason_codes": [
-        "VERIFICATION_PASSED"
+        "VERIFICATION_CHECK_FAILED",
+        "exit=7"
       ],
-      "check": "host file unreadable from verify"
+      "check": "payload ran; host file unreadable"
     },
     "V04_caller_impersonation": {
       "kind": "adversarial",
@@ -151,7 +155,7 @@
       "reason_codes": [
         "CALLER_AUTH_INVALID"
       ],
-      "check": "asserting another caller's name without its secret refused"
+      "check": "another caller's name without its secret refused"
     },
     "V05_unlisted_branch": {
       "kind": "adversarial",
@@ -183,27 +187,30 @@
         "VERIFICATION_FAILED",
         "VERIFIED_RECEIPT_VALID"
       ],
-      "check": "buggy tree refused, fixed tree published"
+      "check": "failing tree refused, fixed tree published"
     },
     "B03_multi_harness_adapters": {
       "kind": "benign",
       "description": "Claude Code, Codex and agy adapter shapes each verify and publish",
       "passes": 3,
       "repeats": 3,
-      "reason_codes": [],
-      "check": "three adapters each verified and published HEAD"
+      "reason_codes": [
+        "VERIFICATION_PASSED",
+        "VERIFIED_RECEIPT_VALID"
+      ],
+      "check": "three adapter shapes each verified and published HEAD over POST /nlip/"
     }
   },
   "latency_ms": {
     "verify": {
-      "n": 54,
-      "p50": 137.02,
-      "p95": 279.51
+      "n": 63,
+      "p50": 85.73,
+      "p95": 107.26
     },
     "publish_allowed": {
-      "n": 15,
-      "p50": 178.12,
-      "p95": 230.14
+      "n": 24,
+      "p50": 73.53,
+      "p95": 83.43
     }
   },
   "sandbox": "sandbox-exec"

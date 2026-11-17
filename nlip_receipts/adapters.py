@@ -2,14 +2,14 @@
 
 Demonstrates that the Type-3 Security Extension is completely framework- and harness-agnostic:
 each adapter translates a harness-native tool invocation into a standard ECMA-430 `NLIP_Message`,
-sends it through the NLIP Type-3 boundary (`POST /nlip/` or in-process `Type3ReceiptExtension`),
+sends it through the NLIP Type-3 boundary (in-process by default, or any `transport` such as `POST /nlip/`),
 and converts the structured `NLIP_Message` response back to the harness's native hook format.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from nlip_sdk.nlip import NLIP_Message
 
@@ -55,9 +55,18 @@ class BaseHarnessAdapter:
 
     harness_name: str = "generic"
 
-    def __init__(self, extension: Type3ReceiptExtension, auth_token: str):
+    def __init__(
+        self,
+        extension: Type3ReceiptExtension,
+        auth_token: str,
+        *,
+        transport: Optional[Callable[[NLIP_Message], NLIP_Message]] = None,
+    ):
+        """`transport` sends an NLIP request and returns the response (e.g. an HTTP POST to
+        `/nlip/`); by default the adapter calls the extension in-process."""
         self.extension = extension
         self.auth_token = auth_token
+        self.transport = transport or extension.handle_nlip_message
 
     def send_nlip(
         self,
@@ -74,7 +83,7 @@ class BaseHarnessAdapter:
             text_summary=text_summary,
             forged_receipt=forged_receipt,
         )
-        rsp_msg = self.extension.handle_nlip_message(req_msg)
+        rsp_msg = self.transport(req_msg)
         decision, receipt = extract_decision_from_response(rsp_msg)
         return decision, receipt, rsp_msg
 

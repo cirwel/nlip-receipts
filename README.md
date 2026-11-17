@@ -17,7 +17,7 @@ The Focus Area 3 specification requires that a Security Extension *"cannot see t
 3. **The policy implemented by the team:** Explicit per-repository, per-destination `PolicyConfig` specifying the verification argv vector, allowed caller identities, receipt TTL, single-use semantics, and `policy_epoch`.
 
 `evaluate_type3_gate()` in [`nlip_receipts/gate.py`](nlip_receipts/gate.py) is a **pure function** of `(proposal, resolved_commit, resolved_tree, receipt, latest_tree_receipt, receipt_hmac_valid, policy, now, caller_authenticated)`:
-- **0 LLM calls** on the enforcement path. The decision, including its ledger lookups, takes about 1 ms; a real `publish` is dominated by the `git push` (tens to a couple of hundred ms, depending on host load) and `verify` by the sandboxed test run (see §5).
+- **0 LLM calls** on the enforcement path. The decision, including its ledger reads, takes under 1 ms; a real `publish` is dominated by the `git push` (tens of ms) and `verify` by the sandboxed test run (see §5).
 - **Sandboxed verification:** the verify command imports code from the untrusted tree, so it runs under `sandbox-exec` (macOS) or `bwrap` (Linux) with no network, no Unix sockets, no host writes, and no view of the ledger or other repositories. See [`SECURITY.md`](SECURITY.md#threat-model-and-limitations) for the threat model and the remaining limitation.
 - **Snapshot-isolated verification (`git archive <tree_oid>`):** Verification runs inside an isolated temporary directory exported from the immutable Git tree object rather than the live working tree, eliminating concurrent working-tree race conditions.
 - **Commit-pinned publication (`git push <dest> <commit_oid>:refs/heads/<branch>`):** Publication pushes the exact verified commit object rather than a mutable branch ref, eliminating post-verification TOCTOU mutations.
@@ -96,23 +96,23 @@ Every attempt is an ECMA-430 message POSTed to the `nlip_server` app, with sandb
 
 - **Attacks blocked: 16/16 scenarios.** A01–A10 from the paper (A08 split into expiry and policy-epoch rotation), plus V01–V05: code run by `verify` pushing to the destination, rewriting the ledger, and reading host files; impersonating a caller without its secret; and publishing to a branch outside the policy allowlist.
 - **Benign workflows completed: 3/3**: verify→publish; failing commit → fix → re-verify → publish; and the three adapter shapes each verifying and publishing.
-- **Latency:** `verify` p50 137 ms (git archive, manifest check, sandboxed test run); allowed `publish` p50 178 ms (gate plus `git push`). These depend heavily on host load: an earlier run on the same machine under lighter load measured 86 ms and 78 ms.
+- **Latency:** `verify` p50 86 ms (git archive, manifest check, sandboxed test run); allowed `publish` p50 74 ms (gate plus `git push`). Both vary with host load.
 
 ### 5.2 Decision-function ablation (`eval/benchmark.py`)
-This calls `evaluate_type3_gate()` directly on seeded ledger states. Receipts are written straight into the ledger, and no NLIP message, `verify` or `git push` is involved. The baselines are simulated decision policies: `B0` allows everything, `B1` refuses only when no success claim is present, `B2` trusts any receipt submessage, and `B3` trusts an "any run passed" flag. The ablations each remove one binding from the real gate. There are 13 scenarios × 8 systems = 104 deterministic cases, each repeated 20 times to sample latency (2,080 decisions).
+This calls `evaluate_type3_gate()` directly on seeded ledger states. Receipts are written straight into the ledger, and the decision cases involve no NLIP message, `verify` or `git push` (a separate loop times 10 real verify + publish runs). The baselines are simulated decision policies: `B0` allows everything, `B1` refuses only when no success claim is present, `B2` trusts any receipt submessage, and `B3` trusts an "any run passed" flag. The ablations each remove one binding from the real gate. There are 13 scenarios × 8 systems = 104 deterministic cases, each repeated 20 times to sample latency (2,080 decisions).
 
 | System | Attack block rate | Benign completion | Decision p50 (ms) | Decision p99 (ms) |
 |---|---:|---:|---:|---:|
-| `B0_no_gate` (simulated) | 0% (0/200) | 100% (60/60) | 0.36 | 0.57 |
-| `B1_prompt_only` (simulated) | 10% (20/200) | 100% (60/60) | 0.42 | 0.72 |
-| `B2_submessage_trust` (simulated) | 20% (40/200) | 100% (60/60) | 0.45 | 0.87 |
-| `B3_unbound_flag` (simulated) | 30% (60/200) | 100% (60/60) | 0.46 | 1.05 |
-| `Abl_no_tree_bind` | 80% (160/200) | 100% (60/60) | 1.13 | 2.13 |
-| `Abl_no_caller_bind` | 90% (180/200) | 100% (60/60) | 1.08 | 2.44 |
-| `Abl_no_profile_bind` | 90% (180/200) | 100% (60/60) | 1.24 | 2.70 |
-| **`S4_nlip_type3_gate`** | **100% (200/200)** | **100% (60/60)** | **1.13** | **2.85** |
+| `B0_no_gate` (simulated) | 0% (0/200) | 100% (60/60) | 0.42 | 0.61 |
+| `B1_prompt_only` (simulated) | 10% (20/200) | 100% (60/60) | 0.43 | 0.72 |
+| `B2_submessage_trust` (simulated) | 20% (40/200) | 100% (60/60) | 0.44 | 0.87 |
+| `B3_unbound_flag` (simulated) | 30% (60/200) | 100% (60/60) | 0.50 | 1.03 |
+| `Abl_no_tree_bind` | 80% (160/200) | 100% (60/60) | 0.56 | 1.27 |
+| `Abl_no_caller_bind` | 90% (180/200) | 100% (60/60) | 0.57 | 1.43 |
+| `Abl_no_profile_bind` | 90% (180/200) | 100% (60/60) | 0.59 | 1.46 |
+| **`S4_nlip_type3_gate`** | **100% (200/200)** | **100% (60/60)** | **0.63** | **1.75** |
 
-All systems perform the same ledger lookups, so the gate's own checks add roughly 0.8 ms over `B0`. In this harness A05 reuses A04's committed-mutation case; the end-to-end suite tests an actual uncommitted working-tree edit.
+All systems perform the same ledger reads (including the caller-secret check), so the gate's own checks add about 0.2 ms over `B0`. The single-use consume transaction that follows an allow is not timed. In this harness A05 reuses A04's committed-mutation case; the end-to-end suite tests an actual uncommitted working-tree edit.
 
 ---
 

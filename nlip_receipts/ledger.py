@@ -37,6 +37,7 @@ _DDL = (
         single_use INTEGER NOT NULL,
         allow_tree_equiv INTEGER NOT NULL DEFAULT 0,
         allowed_branches_json TEXT NOT NULL DEFAULT '["main"]',
+        revoked INTEGER NOT NULL DEFAULT 0,
         policy_epoch INTEGER NOT NULL,
         updated_at REAL NOT NULL,
         PRIMARY KEY (repo_id, destination, profile_id)
@@ -136,6 +137,8 @@ class ReceiptLedger:
                 if "conversation_id" not in dcols:
                     conn.execute("ALTER TABLE decisions ADD COLUMN conversation_id TEXT")
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
+                if "revoked" not in cols:
+                    conn.execute("ALTER TABLE policies ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
                 if "allowed_branches_json" not in cols:
                     conn.execute(
                         "ALTER TABLE policies ADD COLUMN allowed_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'"
@@ -251,6 +254,7 @@ class ReceiptLedger:
                         single_use = excluded.single_use,
                         allow_tree_equiv = excluded.allow_tree_equiv,
                         allowed_branches_json = excluded.allowed_branches_json,
+                        revoked = 0,
                         policy_epoch = policies.policy_epoch + 1,
                         updated_at = excluded.updated_at
                     RETURNING policy_epoch
@@ -291,7 +295,7 @@ class ReceiptLedger:
     def get_policy(self, repo_id: str, destination: str, profile_id: str = "default") -> Optional[PolicyConfig]:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT * FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                "SELECT * FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0",
                 (repo_id, destination, profile_id),
             ).fetchone()
         if not row:
@@ -310,27 +314,39 @@ class ReceiptLedger:
             policy_epoch=int(row["policy_epoch"]),
         )
 
+    # Revocation keeps the policy row (marked revoked) and advances its epoch, so re-creating the
+    # policy later continues from a higher epoch and receipts issued before revocation stay dead.
     def revoke_policy(self, repo_id: str, destination: str, profile_id: str = "default") -> bool:
-        """Delete a policy. Later `verify`/`publish` calls fail closed with POLICY_NOT_FOUND, and
-        receipts issued under it can no longer be consumed (`mark_consumed` needs the live policy).
-        Returns True if a policy was removed."""
+        """Revoke a policy. Later `verify`/`publish` calls fail closed with POLICY_NOT_FOUND, and
+        receipts issued under it can never be spent, even if the policy is re-created.
+        Returns True if an active policy was revoked."""
         with self._lock, closing(self._connect()) as conn, conn:
             cur = conn.execute(
-                "DELETE FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0""",
                 (repo_id, destination, profile_id),
             )
             return cur.rowcount > 0
 
     def disable_destination(self, destination: str) -> int:
-        """Revoke every policy that publishes to `destination`. Returns the number removed."""
+        """Revoke every active policy that publishes to `destination`. Returns the number revoked."""
         with self._lock, closing(self._connect()) as conn, conn:
-            return conn.execute("DELETE FROM policies WHERE destination = ?", (destination,)).rowcount
+            return conn.execute(
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE destination = ? AND revoked = 0""",
+                (destination,),
+            ).rowcount
 
     def clear_repo(self, repo_id: str) -> tuple[int, int]:
-        """Purge policies and receipts for `repo_id`. The hash-chained decision log is kept, since
-        deleting rows from it would break the chain. Returns (policies_removed, receipts_removed)."""
+        """Revoke every policy for `repo_id` and delete its receipts. Policy rows are kept (revoked)
+        so their epochs keep rising if re-created; the hash-chained decision log is kept, since
+        deleting rows from it would break the chain. Returns (policies_revoked, receipts_removed)."""
         with self._lock, closing(self._connect()) as conn, conn:
-            pol = conn.execute("DELETE FROM policies WHERE repo_id = ?", (repo_id,)).rowcount
+            pol = conn.execute(
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE repo_id = ? AND revoked = 0""",
+                (repo_id,),
+            ).rowcount
             rec = conn.execute("DELETE FROM receipts WHERE repo_id = ?", (repo_id,)).rowcount
             return pol, rec
 
@@ -496,7 +512,7 @@ class ReceiptLedger:
                     conn.execute("ROLLBACK")
                     return False
                 pol_row = conn.execute(
-                    "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                    "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0",
                     (row["repo_id"], row["destination"], row["profile_id"]),
                 ).fetchone()
                 if not pol_row or int(row["policy_epoch"]) != int(pol_row["policy_epoch"]):

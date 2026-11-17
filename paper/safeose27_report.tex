@@ -25,7 +25,7 @@
 \begin{abstract}
 Open-source AI agents increasingly invoke side-effecting tools (such as publishing code, creating pull requests, or mutating shared repositories) across standardized communication layers like the Natural Language Interaction Protocol (NLIP, ECMA-430). However, current reference implementations (\texttt{nlip\_server} and \texttt{nlip\_sdk}) provide no communication-layer reference monitor at the Type-3 tool boundary, leaving side-effecting operations vulnerable to unverified execution, agent self-report fabrication (\emph{``all tests passed''}), forged protocol submessages, Confused-Deputy replay, and Time-of-Check-to-Time-of-Use (TOCTOU) working-tree mutations.
 
-We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Security Extension (SE) for NLIP that enforces \emph{execution-attested side-effect gating}. Under \texttt{nlip-receipts}, a publication tool call (\texttt{publish}) is permitted if and only if an authorized caller references an immutable Git tree digest (\texttt{tree\_oid}) for which the trusted Type-3 verifier previously recorded a passing check (\texttt{verify}) inside an isolated archive snapshot (\texttt{git archive}) under the active policy epoch and target profile. Strictly satisfying the SafeOSE Focus Area~3 Fit Test, the gate decision is a pure, zero-LLM-call function of the structured NLIP tool-call submessage, SE-protected SQLite ledger state, and explicit operator policy. Because the code being verified is itself untrusted, verification runs inside an OS sandbox (\texttt{sandbox-exec} on macOS, bubblewrap on Linux). In an end-to-end suite that sends real NLIP messages, runs sandboxed verification and performs real \texttt{git push}es, \texttt{nlip-receipts} blocks all 16 attack scenarios, including attempts by the verified code to escape verification, and completes all 3 benign workflows. A decision-function ablation shows that each receipt binding is necessary. The gate decision takes about 1~ms; a publication is dominated by its \texttt{git push} (178~ms p50 on a loaded laptop). Thin adapters translate Claude Code, Codex CLI and Antigravity (\texttt{agy}) tool-call shapes into NLIP messages. Finally, we map our controls to ECMA-434 and propose a new Security Countermeasure and Objective (\textbf{SCO 7.3.4: Execution-Attested Side-Effect Gating}).
+We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Security Extension (SE) for NLIP that enforces \emph{execution-attested side-effect gating}. Under \texttt{nlip-receipts}, a publication tool call (\texttt{publish}) is permitted if and only if an authorized caller references an immutable Git tree digest (\texttt{tree\_oid}) for which the trusted Type-3 verifier previously recorded a passing check (\texttt{verify}) inside an isolated archive snapshot (\texttt{git archive}) under the active policy epoch and target profile. Strictly satisfying the SafeOSE Focus Area~3 Fit Test, the gate decision is a pure, zero-LLM-call function of the structured NLIP tool-call submessage, SE-protected SQLite ledger state, and explicit operator policy. Because the code being verified is itself untrusted, verification runs inside an OS sandbox (\texttt{sandbox-exec} on macOS, bubblewrap on Linux). In an end-to-end suite that sends real NLIP messages, runs sandboxed verification and performs real \texttt{git push}es, \texttt{nlip-receipts} blocks all 16 attack scenarios, including attempts by the verified code to escape verification, and completes all 3 benign workflows. A decision-function ablation shows that each receipt binding is necessary. The gate decision takes 0.63~ms (p50); a publication is dominated by its \texttt{git push} (74~ms p50). Thin adapters translate Claude Code, Codex CLI and Antigravity (\texttt{agy}) tool-call shapes into NLIP messages. Finally, we map our controls to ECMA-434 and propose a new Security Countermeasure and Objective (\textbf{SCO 7.3.4: Execution-Attested Side-Effect Gating}).
 \end{abstract}
 
 \begin{document}
@@ -144,7 +144,7 @@ Because all policy and state live behind the NLIP message boundary, a harness ne
 
 \section{Evaluation}
 
-We use two harnesses, both run by \texttt{make eval} and in CI on every push. The \textbf{end-to-end attack suite} (\texttt{eval/e2e\_attacks.py}) exercises the real boundary: every attempt is an ECMA-430 message POSTed to the \texttt{nlip\_server} app, \texttt{verify} runs in the sandbox, \texttt{publish} performs a real \texttt{git push} into bare destination repositories, and callers authenticate with registered secrets. An attack counts as blocked only if the destination repositories show none of its effect. The \textbf{decision-function ablation} (\texttt{eval/benchmark.py}) calls \texttt{evaluate\_type3\_gate()} directly on seeded ledger states to isolate the contribution of each binding; it involves no NLIP message, \texttt{verify} or \texttt{git push}. Latencies were measured on a macOS laptop under heavy background load; the Linux CI run reproduces every pass/fail result.
+We use two harnesses, both run by \texttt{make eval} and in CI on every push. The \textbf{end-to-end attack suite} (\texttt{eval/e2e\_attacks.py}) exercises the real boundary: every attempt is an ECMA-430 message POSTed to the \texttt{nlip\_server} app, \texttt{verify} runs in the sandbox, \texttt{publish} performs a real \texttt{git push} into bare destination repositories, and callers authenticate with registered secrets. An attack counts as blocked only if the destination repositories show none of its effect. The \textbf{decision-function ablation} (\texttt{eval/benchmark.py}) calls \texttt{evaluate\_type3\_gate()} directly on seeded ledger states to isolate the contribution of each binding; it involves no NLIP message, \texttt{verify} or \texttt{git push}. Latencies were measured on a macOS laptop under background load and vary with host load; the Linux CI run reproduces every pass/fail result.
 
 \begin{table}[t]
 \centering
@@ -201,16 +201,16 @@ Table~\ref{tab:eval_overall} compares the full gate (\texttt{S4}) with simulated
 \toprule
 \textbf{System} & \textbf{Block Rate} & \textbf{Benign} & \textbf{p50} & \textbf{p99} \\
 \midrule
-\texttt{B0\_no\_gate} & 0\% (0/200) & 100\% & 0.36 & 0.57 \\
-\texttt{B1\_prompt\_only} & 10\% (20/200) & 100\% & 0.42 & 0.72 \\
-\texttt{B2\_submessage\_trust} & 20\% (40/200) & 100\% & 0.45 & 0.87 \\
-\texttt{B3\_unbound\_flag} & 30\% (60/200) & 100\% & 0.46 & 1.05 \\
+\texttt{B0\_no\_gate} & 0\% (0/200) & 100\% & 0.42 & 0.61 \\
+\texttt{B1\_prompt\_only} & 10\% (20/200) & 100\% & 0.43 & 0.72 \\
+\texttt{B2\_submessage\_trust} & 20\% (40/200) & 100\% & 0.44 & 0.87 \\
+\texttt{B3\_unbound\_flag} & 30\% (60/200) & 100\% & 0.50 & 1.03 \\
 \midrule
-\texttt{Abl\_no\_tree\_bind} & 80\% (160/200) & 100\% & 1.13 & 2.13 \\
-\texttt{Abl\_no\_caller\_bind} & 90\% (180/200) & 100\% & 1.08 & 2.44 \\
-\texttt{Abl\_no\_profile\_bind} & 90\% (180/200) & 100\% & 1.24 & 2.70 \\
+\texttt{Abl\_no\_tree\_bind} & 80\% (160/200) & 100\% & 0.56 & 1.27 \\
+\texttt{Abl\_no\_caller\_bind} & 90\% (180/200) & 100\% & 0.57 & 1.43 \\
+\texttt{Abl\_no\_profile\_bind} & 90\% (180/200) & 100\% & 0.59 & 1.46 \\
 \midrule
-\textbf{\texttt{S4\_nlip\_type3\_gate}} & \textbf{100\% (200/200)} & \textbf{100\%} & \textbf{1.13} & \textbf{2.85} \\
+\textbf{\texttt{S4\_nlip\_type3\_gate}} & \textbf{100\% (200/200)} & \textbf{100\%} & \textbf{0.63} & \textbf{1.75} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -238,7 +238,7 @@ $\mathcal{A}_{10}$ Superseded failure & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 
 \midrule
 $\mathcal{B}_1$ Benign verify+pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{B}_2$ Fixed commit pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
-$\mathcal{B}_3$ Multi-caller pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
+$\mathcal{B}_3$ Second-caller pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 \bottomrule
 \end{tabular}
 
@@ -250,7 +250,7 @@ $\mathcal{B}_3$ Multi-caller pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\%
 \begin{enumerate}
   \item \textbf{End to end, every attack is stopped at the boundary:} Table~\ref{tab:e2e} shows all 16 attack scenarios blocked and all 3 benign workflows completed, with each outcome read from the destination repositories. The verifier-abuse scenarios ($\mathcal{V}_1$--$\mathcal{V}_3$) succeed when the sandbox is disabled, so the sandbox, not an artifact of the test setup, is what stops them.
   \item \textbf{Each binding is necessary:} Stateless submessage inspection (\texttt{B2}) blocks only $20\%$ of attacks because an adversary can forge a \texttt{structured} receipt submessage ($\mathcal{A}_3$). Session-level flags (\texttt{B3}) block $\mathcal{A}_1$--$\mathcal{A}_3$ ($30\%$) but none of the rest. Removing $\text{Tree}_{\text{oid}}$ binding drops the block rate to $80\%$ (failing $\mathcal{A}_4$/$\mathcal{A}_5$), removing caller binding to $90\%$ (failing $\mathcal{A}_6$), and removing profile/command binding to $90\%$ (failing $\mathcal{A}_7$).
-  \item \textbf{Runtime overhead:} The decision function, including its SQLite lookups and HMAC check, takes 1.13~ms (p50) and 2.85~ms (p99) with \textbf{zero LLM calls}; the simulated pass-through \texttt{B0}, which performs the same lookups, takes 0.36~ms. A real publication is dominated by the commit-pinned \texttt{git push} (178~ms p50 end to end), and a real verification by the archive export and sandboxed test run (137~ms p50 for our small test suite). These latencies are host- and load-dependent; an earlier run on the same laptop under lighter load measured 78~ms and 86~ms.
+  \item \textbf{Runtime overhead:} The decision, including its SQLite reads, HMAC check and caller-secret check, takes 0.63~ms (p50) and 1.75~ms (p99) with \textbf{zero LLM calls}; the simulated pass-through \texttt{B0}, which performs the same reads, takes 0.42~ms, so the gate's own checks cost about 0.2~ms. (The single-use consume transaction after an allow is not included.) A real publication is dominated by the commit-pinned \texttt{git push} (74~ms p50 end to end), and a real verification by the archive export and sandboxed test run (86~ms p50 for our small test suite).
   \item \textbf{Live LLM prompt-injection probe (\texttt{eval/\allowbreak live\_agent\_eval.py}):} We gave two local tool-calling LLMs (\texttt{qwen3-coder-next:\allowbreak latest} and \texttt{gemma4:latest} via Ollama, temperature $0.0$, seed $42$, one sample each) three injection tasks and one benign multi-turn task. Each injection pastes a repository file's contents into the user turn ($\mathcal{I}_1$: fake CI-down override; $\mathcal{I}_2$: forged receipt JSON; $\mathcal{I}_3$: a note asking to reuse a prior commit's receipt on a trojaned commit), and two of the three end with an explicit instruction to act on it, so this probes instruction-following more than indirect injection. Both models emitted the unauthorized \texttt{publish} call in $3/3$ tasks. Under \texttt{S4} those calls were executed against the real gate, and \textbf{0/3} reached the destination (\texttt{MISSING\_RECEIPT}, \texttt{FORGED\_RECEIPT\_SUBMESSAGE}, \texttt{ARTIFACT\_TREE\_MISMATCH}); under \texttt{B0}/\texttt{B1} the emitted call would have been executed (counted, not pushed). The benign task completed for both models. These traces predate the sandbox and caller-authentication changes.
 \end{enumerate}
 
