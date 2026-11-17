@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -35,6 +36,7 @@ _DDL = (
         ttl_seconds REAL NOT NULL,
         single_use INTEGER NOT NULL,
         allow_tree_equiv INTEGER NOT NULL DEFAULT 0,
+        allowed_branches_json TEXT NOT NULL DEFAULT '["main"]',
         policy_epoch INTEGER NOT NULL,
         updated_at REAL NOT NULL,
         PRIMARY KEY (repo_id, destination, profile_id)
@@ -91,7 +93,7 @@ class ReceiptLedger:
         db_path: Path | str,
         hmac_key: Optional[bytes] = None,
         *,
-        strict_caller_auth: bool = False,
+        strict_caller_auth: bool = True,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +101,20 @@ class ReceiptLedger:
         self._hmac_key = hmac_key or secrets.token_bytes(32)
         self.strict_caller_auth = strict_caller_auth
         self._init_db()
+        self._restrict_permissions()
+
+    def _restrict_permissions(self) -> None:
+        """Keep the ledger owner-only, including files created by older versions with the default
+        umask. Fails closed if a group- or world-writable ledger cannot be tightened."""
+        mode = self.db_path.stat().st_mode & 0o777
+        if mode & 0o077:
+            try:
+                os.chmod(self.db_path, 0o600)
+            except OSError as exc:
+                if mode & 0o022:
+                    raise PermissionError(
+                        f"ledger {self.db_path} is group/world-writable and could not be restricted"
+                    ) from exc
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5.0)
@@ -106,13 +122,31 @@ class ReceiptLedger:
         return conn
 
     def _init_db(self) -> None:
-        with self._lock, closing(self._connect()) as conn, conn:
-            for stmt in _DDL:
-                conn.execute(stmt)
-            conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('issuer_id', ?)",
-                (f"nlip-se-{uuid.uuid4().hex[:12]}",),
-            )
+        if not self.db_path.exists():
+            # Create the file 0600 before SQLite opens it, rather than chmod-ing afterwards.
+            os.close(os.open(self.db_path, os.O_CREAT | os.O_WRONLY, 0o600))
+        with self._lock, closing(self._connect()) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")  # serialize concurrent first-open migrations
+            try:
+                for stmt in _DDL:
+                    conn.execute(stmt)
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
+                if "allowed_branches_json" not in cols:
+                    conn.execute(
+                        "ALTER TABLE policies ADD COLUMN allowed_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'"
+                    )
+                    # Ledgers from before sandboxed verify: retire every receipt they hold by
+                    # advancing each policy epoch, so nothing verified unsandboxed can be spent.
+                    conn.execute("UPDATE policies SET policy_epoch = policy_epoch + 1")
+                conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('issuer_id', ?)",
+                    (f"nlip-se-{uuid.uuid4().hex[:12]}",),
+                )
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     def issuer_id(self) -> str:
         with self._lock, closing(self._connect()) as conn:
@@ -160,7 +194,9 @@ class ReceiptLedger:
 
     def verify_caller_secret(self, caller_id: str, secret: Optional[str]) -> bool:
         """If a secret is registered for `caller_id`, verify `secret` via HMAC.
-        When `strict_caller_auth=True`, unprovisioned caller identities fail closed (`False`).
+        With `strict_caller_auth=True` (the default), unprovisioned caller identities fail closed
+        (`False`). `strict_caller_auth=False` accepts any unprovisioned `caller_id` as asserted,
+        which makes caller binding (Confused-Deputy protection) advisory only.
         """
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
@@ -188,9 +224,11 @@ class ReceiptLedger:
         ttl_seconds: float = 900.0,
         single_use: bool = True,
         allow_tree_equivalent_commits: bool = False,
+        allowed_branches: Optional[list[str]] = None,
     ) -> PolicyConfig:
         now = time.time()
         pinned = pinned_file_sha256 or {}
+        branches = list(allowed_branches) if allowed_branches is not None else ["main"]
         with self._lock, closing(self._connect()) as conn:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
@@ -198,8 +236,9 @@ class ReceiptLedger:
                 row = conn.execute(
                     """INSERT INTO policies (
                         repo_id, destination, profile_id, command_json, allowed_callers_json,
-                        pinned_files_json, ttl_seconds, single_use, allow_tree_equiv, policy_epoch, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        pinned_files_json, ttl_seconds, single_use, allow_tree_equiv,
+                        allowed_branches_json, policy_epoch, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                     ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
                         command_json = excluded.command_json,
                         allowed_callers_json = excluded.allowed_callers_json,
@@ -207,6 +246,7 @@ class ReceiptLedger:
                         ttl_seconds = excluded.ttl_seconds,
                         single_use = excluded.single_use,
                         allow_tree_equiv = excluded.allow_tree_equiv,
+                        allowed_branches_json = excluded.allowed_branches_json,
                         policy_epoch = policies.policy_epoch + 1,
                         updated_at = excluded.updated_at
                     RETURNING policy_epoch
@@ -221,6 +261,7 @@ class ReceiptLedger:
                         float(ttl_seconds),
                         1 if single_use else 0,
                         1 if allow_tree_equivalent_commits else 0,
+                        json.dumps(branches),
                         now,
                     ),
                 ).fetchone()
@@ -239,6 +280,7 @@ class ReceiptLedger:
             ttl_seconds=ttl_seconds,
             single_use=single_use,
             allow_tree_equivalent_commits=allow_tree_equivalent_commits,
+            allowed_branches=branches,
             policy_epoch=next_epoch,
         )
 
@@ -260,6 +302,7 @@ class ReceiptLedger:
             ttl_seconds=float(row["ttl_seconds"]),
             single_use=bool(row["single_use"]),
             allow_tree_equivalent_commits=bool(row["allow_tree_equiv"]),
+            allowed_branches=json.loads(row["allowed_branches_json"] or '["main"]'),
             policy_epoch=int(row["policy_epoch"]),
         )
 

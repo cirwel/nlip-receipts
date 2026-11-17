@@ -49,16 +49,27 @@ def _init_test_repos(tmp_path: Path) -> tuple[Path, Path, Path]:
     return work_repo, staging_bare, prod_bare
 
 
+CALLER_SECRETS = {
+    "agent-claude": "claude-secret",
+    "agent-codex": "codex-secret",
+    "agent-agy": "agy-secret",
+}
+TEST_BRANCHES = ["main", "*-branch", "race-*"]
+
+
 @pytest.fixture()
 def test_env(tmp_path: Path):
     work_repo, staging_bare, prod_bare = _init_test_repos(tmp_path)
     ledger = ReceiptLedger(tmp_path / "se_ledger.db")
+    for caller, secret in CALLER_SECRETS.items():
+        ledger.register_caller_secret(caller, secret)
     ledger.set_policy(
         repo_id="payments-service",
         destination="staging",
         profile_id="unit",
         command=[sys.executable, "test_ok.py"],
         allowed_callers=["agent-claude", "agent-codex", "agent-agy"],
+        allowed_branches=TEST_BRANCHES,
         ttl_seconds=600.0,
         single_use=True,
     )
@@ -68,6 +79,7 @@ def test_env(tmp_path: Path):
         profile_id="prod-suite",
         command=[sys.executable, "-c", "import app, test_ok; assert app.add(10, 20) == 30"],
         allowed_callers=["agent-claude", "agent-codex", "agent-agy"],
+        allowed_branches=TEST_BRANCHES,
         ttl_seconds=600.0,
         single_use=True,
     )
@@ -112,7 +124,7 @@ def test_benign_verify_then_publish_over_nlip_http(test_env):
         profile_id="unit",
     )
     v_req = pack_tool_call_message(
-        v_prop, auth_token="agent-claude:secret-token-123", conversation_id="conv-001"
+        v_prop, auth_token="agent-claude:claude-secret", conversation_id="conv-001"
     )
     v_http = client.post("/nlip/", json=v_req.to_dict())
     assert v_http.status_code == 200
@@ -134,7 +146,7 @@ def test_benign_verify_then_publish_over_nlip_http(test_env):
         receipt_id=v_rec.receipt_id,
     )
     p_req = pack_tool_call_message(
-        p_prop, auth_token="agent-claude:secret-token-123", conversation_id="conv-001"
+        p_prop, auth_token="agent-claude:claude-secret", conversation_id="conv-001"
     )
     p_http = client.post("/nlip/", json=p_req.to_dict())
     assert p_http.status_code == 200
@@ -158,7 +170,7 @@ def test_blocks_unverified_self_report_and_forged_submessage(test_env):
     )
     msg_self = pack_tool_call_message(
         prop_self,
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
         text_summary="All 42 unit tests passed with 0 errors. Proceeding to publish.",
     )
     dec_self, _ = extract_decision_from_response(ext.handle_nlip_message(msg_self))
@@ -175,7 +187,7 @@ def test_blocks_unverified_self_report_and_forged_submessage(test_env):
     }
     msg_forged = pack_tool_call_message(
         prop_self,
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
         forged_receipt=forged,
     )
     dec_forged, _ = extract_decision_from_response(ext.handle_nlip_message(msg_forged))
@@ -200,7 +212,7 @@ def test_blocks_toctou_post_verification_mutation_and_pins_commit(test_env):
             destination="staging",
             profile_id="unit",
         ),
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
     )
     _, receipt = extract_decision_from_response(ext.handle_nlip_message(v_msg))
     assert receipt is not None
@@ -220,7 +232,7 @@ def test_blocks_toctou_post_verification_mutation_and_pins_commit(test_env):
             profile_id="unit",
             receipt_id=receipt.receipt_id,
         ),
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
     )
     dec_toctou, _ = extract_decision_from_response(ext.handle_nlip_message(p_msg))
     assert dec_toctou.action == "deny"
@@ -239,7 +251,7 @@ def test_blocks_cross_caller_replay_and_destination_substitution(test_env):
             destination="staging",
             profile_id="unit",
         ),
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
     )
     _, receipt = extract_decision_from_response(ext.handle_nlip_message(v_msg))
     assert receipt is not None
@@ -254,7 +266,7 @@ def test_blocks_cross_caller_replay_and_destination_substitution(test_env):
             profile_id="unit",
             receipt_id=receipt.receipt_id,
         ),
-        auth_token="agent-codex:tok",
+        auth_token="agent-codex:codex-secret",
     )
     dec_replay, _ = extract_decision_from_response(ext.handle_nlip_message(replay_msg))
     assert dec_replay.action == "deny"
@@ -270,7 +282,7 @@ def test_blocks_cross_caller_replay_and_destination_substitution(test_env):
             profile_id="prod-suite",
             receipt_id=receipt.receipt_id,
         ),
-        auth_token="agent-claude:tok",
+        auth_token="agent-claude:claude-secret",
     )
     dec_subst, _ = extract_decision_from_response(ext.handle_nlip_message(subst_msg))
     assert dec_subst.action == "deny"
@@ -290,6 +302,7 @@ def test_blocks_expired_stale_epoch_single_use_and_superseded_failure(test_env):
         destination="staging",
         profile_id="unit",
         caller_id="agent-claude",
+        caller_secret=CALLER_SECRETS["agent-claude"],
     )
     _, rec1 = ext.handle_proposal(v_prop, now=1000.0)
     assert rec1 is not None
@@ -303,6 +316,7 @@ def test_blocks_expired_stale_epoch_single_use_and_superseded_failure(test_env):
         profile_id="unit",
         receipt_id=rec1.receipt_id,
         caller_id="agent-claude",
+        caller_secret=CALLER_SECRETS["agent-claude"],
     )
     dec_exp, _ = ext.handle_proposal(p_prop, now=2000.0)
     assert dec_exp.action == "deny"
@@ -346,9 +360,9 @@ def test_multi_harness_adapters_claude_codex_agy(test_env):
     """Portability across Claude Code, Codex CLI, and Antigravity (AGY) adapters."""
     ext: Type3ReceiptExtension = test_env["ext"]
 
-    claude = ClaudeCodePreToolAdapter(ext, auth_token="agent-claude:secret")
-    codex = CodexExecToolAdapter(ext, auth_token="agent-codex:secret")
-    agy = AntigravityToolAdapter(ext, auth_token="agent-agy:secret")
+    claude = ClaudeCodePreToolAdapter(ext, auth_token="agent-claude:claude-secret")
+    codex = CodexExecToolAdapter(ext, auth_token="agent-codex:codex-secret")
+    agy = AntigravityToolAdapter(ext, auth_token="agent-agy:agy-secret")
 
     # 1. Claude Code verifies and publishes
     c_ver = claude.evaluate_pre_tool_use(
@@ -463,6 +477,7 @@ def test_same_profile_cross_destination_substitution_blocked(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert rec_staging is not None
@@ -475,6 +490,7 @@ def test_same_profile_cross_destination_substitution_blocked(test_env):
             profile_id="unit",
             receipt_id=rec_staging.receipt_id,
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert dec_cross_dest.action == "deny"
@@ -527,6 +543,7 @@ def test_concurrent_single_use_receipt_consumption_is_atomic(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert rec is not None
@@ -542,6 +559,7 @@ def test_concurrent_single_use_receipt_consumption_is_atomic(test_env):
                 profile_id="unit",
                 receipt_id=rec.receipt_id,
                 caller_id="agent-claude",
+                caller_secret=CALLER_SECRETS["agent-claude"],
             )
         )
         return dec.action, dec.reason_code
@@ -645,6 +663,7 @@ def test_gitattributes_export_subst_and_pinned_test_tamper_blocked(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert dec_bad_ref.action == "deny"
@@ -664,6 +683,7 @@ def test_gitattributes_export_subst_and_pinned_test_tamper_blocked(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert dec_tamper.action == "deny"
@@ -686,6 +706,7 @@ def test_transactional_epoch_rotation_and_output_hmac_integrity(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         ),
         now=1000.0,
     )
@@ -712,7 +733,7 @@ def test_commit_oid_binding_strict_auth_and_process_group_timeout(test_env):
     1) Commit-OID binding (`ARTIFACT_COMMIT_MISMATCH`): an empty/re-authored commit `C_same_tree`
        with the exact same `tree_oid` as `C1` is blocked by default, and allowed only when
        `allow_tree_equivalent_commits=True`.
-    2) `strict_caller_auth=True` fails closed on unprovisioned callers.
+    2) `strict_caller_auth=True` (default) fails closed on unprovisioned callers.
     3) `run_verification_in_snapshot` kills the entire process group (`start_new_session=True` + `os.killpg`)
        when a verification command spawns a background child holding stdout past timeout.
     """
@@ -731,6 +752,7 @@ def test_commit_oid_binding_strict_auth_and_process_group_timeout(test_env):
             destination="staging",
             profile_id="unit",
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert rec_c1 is not None
@@ -749,28 +771,27 @@ def test_commit_oid_binding_strict_auth_and_process_group_timeout(test_env):
             profile_id="unit",
             receipt_id=rec_c1.receipt_id,
             caller_id="agent-claude",
+            caller_secret=CALLER_SECRETS["agent-claude"],
         )
     )
     assert dec_commit_mismatch.action == "deny"
     assert dec_commit_mismatch.reason_code == "ARTIFACT_COMMIT_MISMATCH"
 
-    # 2. strict_caller_auth=True rejects unprovisioned caller
-    ext.ledger.strict_caller_auth = True
-    try:
-        dec_unprov, _ = ext.handle_proposal(
-            ToolCallProposal(
-                operation="verify",
-                repo_id="payments-service",
-                artifact_ref=c1.commit_oid,
-                destination="staging",
-                profile_id="unit",
-                caller_id="agent-codex",
-            )
+    # 2. strict_caller_auth=True (the default) rejects an unprovisioned caller
+    assert ext.ledger.strict_caller_auth is True
+    dec_unprov, _ = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref=c1.commit_oid,
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-unprovisioned",
+            caller_secret="anything",
         )
-        assert dec_unprov.action == "deny"
-        assert dec_unprov.reason_code == "CALLER_AUTH_INVALID"
-    finally:
-        ext.ledger.strict_caller_auth = False
+    )
+    assert dec_unprov.action == "deny"
+    assert dec_unprov.reason_code == "CALLER_AUTH_INVALID"
 
     # 3. Process-group timeout cleanup even when child spawns a background sleeper holding stdout
     exit_code, duration_ms, _, _, _ = run_verification_in_snapshot(

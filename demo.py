@@ -65,12 +65,15 @@ def run_demo() -> None:
         c1 = resolve_commit_and_tree(str(work), "HEAD")
 
         ledger = ReceiptLedger(base / "se_ledger.db")
+        for caller in ("agent-claude", "agent-codex", "agent-agy"):
+            ledger.register_caller_secret(caller, "session-token")
         policy = ledger.set_policy(
             repo_id="payments-service",
             destination="staging",
             profile_id="unit-suite",
             command=[sys.executable, "test_settle.py"],
             allowed_callers=["agent-claude", "agent-codex", "agent-agy"],
+            allowed_branches=["main", "codex-verified", "agy-verified"],
             ttl_seconds=600.0,
             single_use=True,
         )

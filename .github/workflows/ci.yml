@@ -18,6 +18,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install bubblewrap (verify sandbox)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bwrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent -- /bin/true
+
       - name: Install dependencies and nlip-project packages
         run: |
           python -m pip install --upgrade pip
@@ -26,7 +34,7 @@ jobs:
             "nlip-server @ git+https://github.com/nlip-project/nlip_server.git"
           python -m pip install -e .
 
-      - name: Run 11-suite pytest verification
+      - name: Run pytest suite
         run: pytest -v
 
       - name: Run 2,080-trial reproducible evaluation & ablation benchmark

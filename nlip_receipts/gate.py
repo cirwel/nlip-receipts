@@ -10,6 +10,7 @@ Satisfies the NDSS SafeOSE '27 Focus Area 3 Fit Test:
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import time
 from typing import Optional
@@ -17,8 +18,11 @@ from typing import Optional
 from nlip_sdk.nlip import NLIP_Message
 
 from .git_artifact import (
+    SANDBOX_MODES,
     ArtifactError,
+    SandboxUnavailable,
     compute_env_fingerprint,
+    is_valid_branch_name,
     push_immutable_commit,
     resolve_commit_and_tree,
     run_verification_in_snapshot,
@@ -44,9 +48,14 @@ def evaluate_type3_gate(
     receipt_hmac_valid: bool,
     policy: Optional[PolicyConfig],
     now: float,
-    caller_authenticated: bool = True,
+    caller_authenticated: bool = False,
+    verify_isolation: str = "required",
 ) -> Type3Decision:
-    """Pure boundary decision function for `publish` invocations at the Type-3 control point."""
+    """Pure boundary decision function for `publish` invocations at the Type-3 control point.
+
+    `caller_authenticated` defaults to False (fail closed): callers must pass the result of
+    `ReceiptLedger.verify_caller_secret`.
+    """
     base_kwargs = {
         "operation": proposal.operation,
         "repo_id": proposal.repo_id,
@@ -90,6 +99,20 @@ def evaluate_type3_gate(
                 f"for destination '{proposal.destination}'."
             ),
             sco_refs=["ECMA-434:7.2.1", "ECMA-434:7.2.2", "ECMA-434:7.2.3"],
+            **base_kwargs,
+        )
+
+    if not is_valid_branch_name(proposal.branch) or not any(
+        fnmatch.fnmatchcase(proposal.branch, pat) for pat in policy.allowed_branches
+    ):
+        return Type3Decision(
+            action="deny",
+            reason_code="BRANCH_NOT_ALLOWED",
+            message=(
+                f"[NLIP-SE Type-3] Denied publish: branch '{proposal.branch}' is not permitted by the "
+                f"policy for destination '{proposal.destination}'."
+            ),
+            sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.3.2"],
             **base_kwargs,
         )
 
@@ -149,7 +172,9 @@ def evaluate_type3_gate(
         )
 
     # 6. Verify repository, destination, profile, and command digest binding (blocks destination substitution)
-    expected_cmd_sha, _ = compute_env_fingerprint(policy.command, policy.pinned_file_sha256)
+    expected_cmd_sha, _ = compute_env_fingerprint(
+        policy.command, policy.pinned_file_sha256, verify_isolation
+    )
     if (
         receipt.repo_id != proposal.repo_id
         or receipt.destination != proposal.destination
@@ -275,16 +300,29 @@ class Type3ReceiptExtension:
         ledger: ReceiptLedger,
         repos: dict[str, str],
         destinations: dict[str, str],
+        *,
+        verify_sandbox: str = "required",
     ):
         """
         Args:
             ledger: SE-protected ReceiptLedger instance.
             repos: Mapping of logical `repo_id` -> local repository path.
             destinations: Mapping of logical `destination` -> server-controlled bare Git repo path.
+            verify_sandbox: `"required"` (default) runs `verify` commands under the host OS sandbox
+                and fails closed if none is usable; `"off"` runs untrusted code with SE privileges.
         """
+        if verify_sandbox not in SANDBOX_MODES:
+            raise ValueError(f"verify_sandbox must be one of {SANDBOX_MODES}, got {verify_sandbox!r}")
+        self.verify_sandbox = verify_sandbox
         self.ledger = ledger
         self.repos = {k: os.path.realpath(v) for k, v in repos.items()}
         self.destinations = {k: os.path.realpath(v) for k, v in destinations.items()}
+
+    def _protected_paths(self) -> list[str]:
+        """Paths the verify sandbox must never expose, even inside an interpreter prefix."""
+        db = str(self.ledger.db_path.resolve())
+        ledger_files = [db, db + "-wal", db + "-shm", db + "-journal"]
+        return [*ledger_files, *self.repos.values(), *self.destinations.values()]
 
     def handle_proposal(
         self, proposal: ToolCallProposal, *, now: Optional[float] = None
@@ -391,11 +429,17 @@ class Type3ReceiptExtension:
                     artifact.tree_oid,
                     policy.command,
                     pinned_file_sha256=policy.pinned_file_sha256,
+                    sandbox=self.verify_sandbox,
+                    protected_paths=self._protected_paths(),
                 )
             except ArtifactError as exc:
                 decision = Type3Decision(
                     action="deny",
-                    reason_code="SNAPSHOT_INTEGRITY_FAILED",
+                    reason_code=(
+                        "SANDBOX_UNAVAILABLE"
+                        if isinstance(exc, SandboxUnavailable)
+                        else "SNAPSHOT_INTEGRITY_FAILED"
+                    ),
                     message=f"[NLIP-SE Type-3] Denied verify: snapshot integrity or pinned-test check failed: {exc}",
                     sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
                     operation="verify",
@@ -470,6 +514,7 @@ class Type3ReceiptExtension:
             policy=policy,
             now=current_time,
             caller_authenticated=caller_auth_ok,
+            verify_isolation=self.verify_sandbox,
         )
 
         if decision.action == "allow" and stored_receipt is not None and policy is not None:
