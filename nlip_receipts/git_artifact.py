@@ -73,7 +73,7 @@ _DARWIN_PROFILE = """(version 1)
   (regex #"^/dev/fd/"))
 (deny file-read* {private})
 (allow file-read* (subpath {snap}) {prefixes})
-(allow file-read-metadata)
+(allow file-read-metadata {ancestors})
 """
 
 
@@ -101,6 +101,12 @@ def _sandbox_argv(
                 mach=" ".join(f"(global-name {_sbpl_string(n)})" for n in _DARWIN_MACH_ALLOW),
                 private=" ".join(f"(subpath {_sbpl_string(p)})" for p in _DARWIN_PRIVATE_ROOTS),
                 prefixes=" ".join(f"(subpath {_sbpl_string(src)})" for src, _ in mounts),
+                # Only the directories on the way to allowed paths may be stat-ed, so sandboxed
+                # code cannot probe whether other files under user directories exist.
+                ancestors=" ".join(
+                    f"(literal {_sbpl_string(a)})"
+                    for a in _ancestors([snap, *(src for src, _ in mounts), *(dest for _, dest in mounts)])
+                ),
             )
             if protected:
                 # Last matching rule wins in SBPL, so these override the prefix allows above.
@@ -150,6 +156,16 @@ def _sandbox_argv(
 
 _LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
 _SYSTEM_PREFIXES = _LINUX_SYSTEM_DIRS + ("/System", "/Library", "/Applications")
+
+
+def _ancestors(paths: Sequence[str]) -> list[str]:
+    out: set[str] = {"/"}
+    for path in paths:
+        current = path
+        while current not in ("/", ""):
+            current = os.path.dirname(current)
+            out.add(current)
+    return sorted(out)
 
 
 def _under_system_prefix(path: str) -> bool:

@@ -316,6 +316,20 @@ def test_verify_code_cannot_read_host_files(host_dir):
     assert rec.exit_code != 65
 
 
+def test_verify_code_cannot_probe_host_file_existence(host_dir):
+    """Even metadata (does this file exist?) must not leak through the exit status."""
+    e = _env(host_dir)
+    probe = host_dir / "exists.txt"
+    probe.write_text("x")
+    _commit(
+        e["work"],
+        {"app.py": f"import os\nif os.path.exists({str(probe)!r}):\n    raise SystemExit(9)\ndef add(a, b):\n    return a + b\n"},
+    )
+    dec, rec = e["ext"].handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED"
+    assert rec.exit_code == 0
+
+
 def test_unregistered_caller_name_is_refused_by_default(tmp_path):
     """The original bypass: any token naming an unregistered caller authenticated as that caller."""
     e = _env(tmp_path)
