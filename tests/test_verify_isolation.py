@@ -151,11 +151,46 @@ def test_verify_code_has_no_network(tmp_path):
         e["work"],
         {"app.py": f"import socket\ntry:\n    socket.create_connection(('127.0.0.1', {port}), timeout=2)\nexcept OSError:\n    pass\ndef add(a, b):\n    return a + b\n"},
     )
-    e["ext"].handle_proposal(_prop("verify", "alice"))
+    dec, _ = e["ext"].handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED"  # the payload ran and the test still passed
     done.set()
     t.join(timeout=2.0)
     srv.close()
     assert hits == []
+
+
+def test_verify_code_cannot_connect_to_host_unix_socket(tmp_path):
+    """Filesystem Unix sockets (docker, ssh-agent, local services) must be unreachable from verify.
+    The socket lives under the current working directory, not /tmp, so a sandbox that merely
+    hides /tmp would not pass."""
+    import os
+    import tempfile
+
+    e = _env(tmp_path)
+    sock_dir = tempfile.mkdtemp(dir=os.getcwd(), prefix=".s-")
+    path = os.path.join(sock_dir, "s")
+    srv = socket.socket(socket.AF_UNIX)
+    try:
+        srv.bind(path)
+        srv.listen(1)
+        srv.settimeout(0.1)
+        _commit(
+            e["work"],
+            {"app.py": f"import socket\ntry:\n    socket.socket(socket.AF_UNIX).connect({path!r})\nexcept OSError:\n    pass\ndef add(a, b):\n    return a + b\n"},
+        )
+        dec, _ = e["ext"].handle_proposal(_prop("verify", "alice"))
+        assert dec.reason_code == "VERIFICATION_PASSED"
+        try:
+            conn, _ = srv.accept()
+            conn.close()
+            connected = True
+        except (socket.timeout, OSError):
+            connected = False
+        assert connected is False
+    finally:
+        srv.close()
+        os.unlink(path)
+        os.rmdir(sock_dir)
 
 
 def test_verify_fails_closed_without_sandbox(tmp_path, monkeypatch):
@@ -165,6 +200,35 @@ def test_verify_fails_closed_without_sandbox(tmp_path, monkeypatch):
     assert dec.action == "deny"
     assert dec.reason_code == "SANDBOX_UNAVAILABLE"
     assert rec is None
+
+
+def test_receipt_from_unsandboxed_verify_cannot_satisfy_sandboxed_gate(tmp_path):
+    e = _env(tmp_path)
+    unsandboxed = Type3ReceiptExtension(
+        ledger=e["ledger"],
+        repos={"svc": str(e["work"])},
+        destinations={"prod": str(e["prod"])},
+        verify_sandbox="off",
+    )
+    _, rec = unsandboxed.handle_proposal(_prop("verify", "alice"))
+    assert rec.status == "passed"
+    dec, _ = e["ext"].handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.action == "deny"
+    assert dec.reason_code == "PROFILE_OR_REPO_MISMATCH"
+
+
+def test_legacy_ledger_migration_retires_existing_receipts(tmp_path):
+    import sqlite3
+
+    e = _env(tmp_path)
+    _, rec = e["ext"].handle_proposal(_prop("verify", "alice"))
+    with sqlite3.connect(e["db"]) as conn:  # simulate a ledger created before this change
+        conn.execute("ALTER TABLE policies DROP COLUMN allowed_branches_json")
+    upgraded = ReceiptLedger(e["db"], hmac_key=e["ledger"]._hmac_key)
+    ext = Type3ReceiptExtension(ledger=upgraded, repos={"svc": str(e["work"])}, destinations={"prod": str(e["prod"])})
+    dec, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.reason_code == "POLICY_EPOCH_STALE"
+    assert _prod_main(e["prod"]) is None
 
 
 def test_unprovisioned_caller_cannot_impersonate(tmp_path):

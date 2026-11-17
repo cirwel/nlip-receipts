@@ -74,21 +74,45 @@ def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
     if sys.platform.startswith("linux"):
         exe = shutil.which("bwrap")
         if exe:
-            return [
+            # Expose only system and interpreter directories, read-only. Binding all of `/` would
+            # leave filesystem Unix sockets (/run, $HOME, ...) connectable: --unshare-net isolates
+            # network and abstract sockets, but connect() on a socket file needs no write access.
+            argv = [
                 exe,
-                "--ro-bind", "/", "/",
-                "--dev", "/dev",
-                "--proc", "/proc",
-                "--tmpfs", "/tmp",
-                "--bind", snap, snap,
                 "--unshare-all",
                 "--die-with-parent",
                 "--new-session",
-                "--chdir", snap,
-                "--",
-                *command,
+                "--dev", "/dev",
+                "--proc", "/proc",
+                "--tmpfs", "/tmp",
             ]
+            for path in _linux_readonly_paths(command):
+                if os.path.islink(path):
+                    argv += ["--symlink", os.readlink(path), path]
+                else:
+                    argv += ["--ro-bind-try", path, path]
+            argv += ["--bind", snap, snap, "--chdir", snap, "--", *command]
+            return argv
     return None
+
+
+_LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
+
+
+def _linux_readonly_paths(command: list[str]) -> list[str]:
+    """System directories plus the install prefixes of this interpreter and of `command[0]`."""
+    prefixes = {sys.prefix, sys.base_prefix, sys.exec_prefix}
+    resolved = shutil.which(command[0]) if command else None
+    if resolved:
+        for candidate in (resolved, os.path.realpath(resolved)):
+            prefixes.add(os.path.dirname(os.path.dirname(os.path.abspath(candidate))))
+    out = list(_LINUX_SYSTEM_DIRS)
+    for prefix in sorted(prefixes):
+        if prefix and prefix != "/" and not any(
+            prefix == d or prefix.startswith(d + "/") for d in _LINUX_SYSTEM_DIRS
+        ):
+            out.append(prefix)
+    return out
 
 
 def sandbox_available() -> bool:
@@ -323,13 +347,20 @@ def export_isolated_snapshot(
 
 
 def compute_env_fingerprint(
-    command: list[str], pinned_file_sha256: dict[str, str] | None = None
+    command: list[str],
+    pinned_file_sha256: dict[str, str] | None = None,
+    isolation: str = "required",
 ) -> tuple[str, str]:
-    """Return `(command_sha256, env_fingerprint)` using unambiguous length-prefixed encoding."""
+    """Return `(command_sha256, env_fingerprint)` using unambiguous length-prefixed encoding.
+
+    `command_sha256` also binds the verify isolation mode, so a receipt minted without the
+    sandbox cannot satisfy a gate that requires it.
+    """
     parts = [f"{len(arg)}:{arg}" for arg in command]
     if pinned_file_sha256:
         for k, v in sorted(pinned_file_sha256.items()):
             parts.append(f"pin:{len(k)}:{k}={v}")
+    parts.append(f"isolation:{len(isolation)}:{isolation}")
     cmd_canon = "|".join(parts).encode("utf-8")
     command_sha256 = hashlib.sha256(cmd_canon).hexdigest()
     env_meta = f"py={sys.version_info.major}.{sys.version_info.minor}|platform={sys.platform}".encode(
@@ -368,7 +399,7 @@ def run_verification_in_snapshot(
             "untrusted verification code with Security Extension privileges"
         )
 
-    command_sha256, env_fingerprint = compute_env_fingerprint(command, pinned_file_sha256)
+    command_sha256, env_fingerprint = compute_env_fingerprint(command, pinned_file_sha256, sandbox)
     with tempfile.TemporaryDirectory(prefix="nlip-se-verify-") as snap_dir:
         export_isolated_snapshot(
             repo_path,

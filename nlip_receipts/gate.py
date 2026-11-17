@@ -48,6 +48,7 @@ def evaluate_type3_gate(
     policy: Optional[PolicyConfig],
     now: float,
     caller_authenticated: bool = True,
+    verify_isolation: str = "required",
 ) -> Type3Decision:
     """Pure boundary decision function for `publish` invocations at the Type-3 control point."""
     base_kwargs = {
@@ -164,7 +165,9 @@ def evaluate_type3_gate(
         )
 
     # 6. Verify repository, destination, profile, and command digest binding (blocks destination substitution)
-    expected_cmd_sha, _ = compute_env_fingerprint(policy.command, policy.pinned_file_sha256)
+    expected_cmd_sha, _ = compute_env_fingerprint(
+        policy.command, policy.pinned_file_sha256, verify_isolation
+    )
     if (
         receipt.repo_id != proposal.repo_id
         or receipt.destination != proposal.destination
@@ -497,6 +500,7 @@ class Type3ReceiptExtension:
             policy=policy,
             now=current_time,
             caller_authenticated=caller_auth_ok,
+            verify_isolation=self.verify_sandbox,
         )
 
         if decision.action == "allow" and stored_receipt is not None and policy is not None:
