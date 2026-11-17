@@ -707,5 +707,86 @@ def test_transactional_epoch_rotation_and_output_hmac_integrity(test_env):
     assert ext.ledger.mark_consumed(rec.receipt_id, expected_epoch=1, now=1010.0) is False
 
 
+def test_commit_oid_binding_strict_auth_and_process_group_timeout(test_env):
+    """Regression test:
+    1) Commit-OID binding (`ARTIFACT_COMMIT_MISMATCH`): an empty/re-authored commit `C_same_tree`
+       with the exact same `tree_oid` as `C1` is blocked by default, and allowed only when
+       `allow_tree_equivalent_commits=True`.
+    2) `strict_caller_auth=True` fails closed on unprovisioned callers.
+    3) `run_verification_in_snapshot` kills the entire process group (`start_new_session=True` + `os.killpg`)
+       when a verification command spawns a background child holding stdout past timeout.
+    """
+    from nlip_receipts.git_artifact import run_verification_in_snapshot
+
+    ext: Type3ReceiptExtension = test_env["ext"]
+    work_repo: Path = test_env["work_repo"]
+
+    # 1. Verify C1, then create an empty commit C_same_tree with identical tree_oid
+    c1 = resolve_commit_and_tree(str(work_repo), "HEAD")
+    _, rec_c1 = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref=c1.commit_oid,
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        )
+    )
+    assert rec_c1 is not None
+
+    run_git(str(work_repo), "commit", "--allow-empty", "-m", "forged metadata commit with same tree")
+    c_same_tree = resolve_commit_and_tree(str(work_repo), "HEAD")
+    assert c_same_tree.tree_oid == c1.tree_oid
+    assert c_same_tree.commit_oid != c1.commit_oid
+
+    dec_commit_mismatch, _ = ext.handle_proposal(
+        ToolCallProposal(
+            operation="publish",
+            repo_id="payments-service",
+            artifact_ref=c_same_tree.commit_oid,
+            destination="staging",
+            profile_id="unit",
+            receipt_id=rec_c1.receipt_id,
+            caller_id="agent-claude",
+        )
+    )
+    assert dec_commit_mismatch.action == "deny"
+    assert dec_commit_mismatch.reason_code == "ARTIFACT_COMMIT_MISMATCH"
+
+    # 2. strict_caller_auth=True rejects unprovisioned caller
+    ext.ledger.strict_caller_auth = True
+    try:
+        dec_unprov, _ = ext.handle_proposal(
+            ToolCallProposal(
+                operation="verify",
+                repo_id="payments-service",
+                artifact_ref=c1.commit_oid,
+                destination="staging",
+                profile_id="unit",
+                caller_id="agent-codex",
+            )
+        )
+        assert dec_unprov.action == "deny"
+        assert dec_unprov.reason_code == "CALLER_AUTH_INVALID"
+    finally:
+        ext.ledger.strict_caller_auth = False
+
+    # 3. Process-group timeout cleanup even when child spawns a background sleeper holding stdout
+    exit_code, duration_ms, _, _, _ = run_verification_in_snapshot(
+        str(work_repo),
+        c1.tree_oid,
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); time.sleep(30)",
+        ],
+        timeout=0.3,
+    )
+    assert exit_code == 124
+    assert duration_ms < 3000.0
+
+
+
 
 

@@ -34,6 +34,7 @@ _DDL = (
         pinned_files_json TEXT NOT NULL DEFAULT '{}',
         ttl_seconds REAL NOT NULL,
         single_use INTEGER NOT NULL,
+        allow_tree_equiv INTEGER NOT NULL DEFAULT 0,
         policy_epoch INTEGER NOT NULL,
         updated_at REAL NOT NULL,
         PRIMARY KEY (repo_id, destination, profile_id)
@@ -85,11 +86,18 @@ _DDL = (
 class ReceiptLedger:
     """Thread-safe SQLite ledger owned exclusively by the Type-3 Security Extension."""
 
-    def __init__(self, db_path: Path | str, hmac_key: Optional[bytes] = None):
+    def __init__(
+        self,
+        db_path: Path | str,
+        hmac_key: Optional[bytes] = None,
+        *,
+        strict_caller_auth: bool = False,
+    ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._hmac_key = hmac_key or secrets.token_bytes(32)
+        self.strict_caller_auth = strict_caller_auth
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -152,7 +160,7 @@ class ReceiptLedger:
 
     def verify_caller_secret(self, caller_id: str, secret: Optional[str]) -> bool:
         """If a secret is registered for `caller_id`, verify `secret` via HMAC.
-        If no secret is registered for `caller_id`, return True (allowing unkeyed local tests).
+        When `strict_caller_auth=True`, unprovisioned caller identities fail closed (`False`).
         """
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
@@ -160,7 +168,7 @@ class ReceiptLedger:
                 (caller_id,),
             ).fetchone()
         if not row:
-            return True
+            return not self.strict_caller_auth
         if not secret:
             return False
         msg = f"caller|{len(caller_id)}:{caller_id}|{len(secret)}:{secret}".encode("utf-8")
@@ -179,6 +187,7 @@ class ReceiptLedger:
         pinned_file_sha256: Optional[dict[str, str]] = None,
         ttl_seconds: float = 900.0,
         single_use: bool = True,
+        allow_tree_equivalent_commits: bool = False,
     ) -> PolicyConfig:
         now = time.time()
         pinned = pinned_file_sha256 or {}
@@ -189,14 +198,15 @@ class ReceiptLedger:
                 row = conn.execute(
                     """INSERT INTO policies (
                         repo_id, destination, profile_id, command_json, allowed_callers_json,
-                        pinned_files_json, ttl_seconds, single_use, policy_epoch, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        pinned_files_json, ttl_seconds, single_use, allow_tree_equiv, policy_epoch, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                     ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
                         command_json = excluded.command_json,
                         allowed_callers_json = excluded.allowed_callers_json,
                         pinned_files_json = excluded.pinned_files_json,
                         ttl_seconds = excluded.ttl_seconds,
                         single_use = excluded.single_use,
+                        allow_tree_equiv = excluded.allow_tree_equiv,
                         policy_epoch = policies.policy_epoch + 1,
                         updated_at = excluded.updated_at
                     RETURNING policy_epoch
@@ -210,6 +220,7 @@ class ReceiptLedger:
                         json.dumps(pinned, sort_keys=True),
                         float(ttl_seconds),
                         1 if single_use else 0,
+                        1 if allow_tree_equivalent_commits else 0,
                         now,
                     ),
                 ).fetchone()
@@ -227,6 +238,7 @@ class ReceiptLedger:
             pinned_file_sha256=pinned,
             ttl_seconds=ttl_seconds,
             single_use=single_use,
+            allow_tree_equivalent_commits=allow_tree_equivalent_commits,
             policy_epoch=next_epoch,
         )
 
@@ -247,6 +259,7 @@ class ReceiptLedger:
             pinned_file_sha256=json.loads(row["pinned_files_json"] or "{}"),
             ttl_seconds=float(row["ttl_seconds"]),
             single_use=bool(row["single_use"]),
+            allow_tree_equivalent_commits=bool(row["allow_tree_equiv"]),
             policy_epoch=int(row["policy_epoch"]),
         )
 

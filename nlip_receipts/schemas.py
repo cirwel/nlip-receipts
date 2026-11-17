@@ -25,6 +25,7 @@ class PolicyConfig(BaseModel):
     pinned_file_sha256: dict[str, str] = Field(default_factory=dict)
     ttl_seconds: float = 900.0
     single_use: bool = True
+    allow_tree_equivalent_commits: bool = False
     policy_epoch: int = 1
 
 

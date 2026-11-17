@@ -16,6 +16,7 @@ import hashlib
 import io
 import os
 import re
+import signal
 import subprocess
 import sys
 import tarfile
@@ -285,21 +286,26 @@ def run_verification_in_snapshot(
             "LC_ALL": "C",
         }
         t0 = time.perf_counter()
+        proc = subprocess.Popen(
+            command,
+            cwd=snap_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=clean_env,
+            shell=False,
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                command,
-                cwd=snap_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                env=clean_env,
-                timeout=timeout,
-                shell=False,
-                check=False,
-            )
+            out_bytes, _ = proc.communicate(timeout=timeout)
             exit_code = int(proc.returncode)
-            output_bytes = proc.stdout or b""
+            output_bytes = out_bytes or b""
         except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.wait(timeout=2.0)
             exit_code = 124
             output_bytes = b"verification timed out"
         duration_ms = round((time.perf_counter() - t0) * 1000.0, 3)

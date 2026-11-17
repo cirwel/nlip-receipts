@@ -212,7 +212,7 @@ def evaluate_type3_gate(
             **base_kwargs,
         )
 
-    # 9. Verify exact immutable Git tree digest match (blocks post-verification TOCTOU mutations)
+    # 9. Verify exact immutable Git tree digest match and commit identity (blocks TOCTOU & history-rewrite mutations)
     if receipt.tree_oid != resolved_tree:
         return Type3Decision(
             action="deny",
@@ -220,6 +220,18 @@ def evaluate_type3_gate(
             message=(
                 f"[NLIP-SE Type-3] Denied publish (TOCTOU blocked): candidate tree '{resolved_tree[:12]}' "
                 f"differs from verified receipt tree '{receipt.tree_oid[:12]}'."
+            ),
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            **base_kwargs,
+        )
+
+    if not policy.allow_tree_equivalent_commits and receipt.commit_oid != resolved_commit:
+        return Type3Decision(
+            action="deny",
+            reason_code="ARTIFACT_COMMIT_MISMATCH",
+            message=(
+                f"[NLIP-SE Type-3] Denied publish: candidate commit '{resolved_commit[:12]}' differs from "
+                f"verified commit '{receipt.commit_oid[:12]}' (set allow_tree_equivalent_commits=True to allow)."
             ),
             sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
             **base_kwargs,

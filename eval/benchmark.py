@@ -190,7 +190,9 @@ def _evaluate_publish_under_system(
         rec_for_eval = stored_rec
         if rec_for_eval is not None:
             if system == "Abl_no_tree_bind":
-                rec_for_eval = rec_for_eval.model_copy(update={"tree_oid": resolved_tree})
+                rec_for_eval = rec_for_eval.model_copy(
+                    update={"tree_oid": resolved_tree, "commit_oid": resolved_commit}
+                )
             elif system == "Abl_no_caller_bind":
                 rec_for_eval = rec_for_eval.model_copy(update={"caller_id": proposal.caller_id})
             elif system == "Abl_no_profile_bind" and policy is not None:

@@ -33,7 +33,7 @@ We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Securi
 \maketitle
 
 \section{Introduction \& Problem Definition}
-As AI agents transition from conversational assistants to autonomous software operators, they increasingly share open communication protocols and tool interfaces. The Natural Language Interaction Protocol (\textbf{NLIP}, standardized as \textbf{ECMA-430}~\cite{ecma430} and accompanied by the \textbf{ECMA-434} Security Profiles standard~\cite{ecma434}) establishes a uniform multimodal message envelope (\texttt{NLIP\_Message} and \texttt{NLIP\_SubMessage}) across heterogeneous agent frameworks. In the SafeOSE control-point architecture, every external or internal boundary crossing can host a pluggable Security Extension (SE): Type-1 (user-to-agent), Type-2 (agent-to-agent), and \textbf{Type-3 (agent-to-tool/model boundary)}.
+As AI agents transition from conversational assistants to autonomous software operators, they increasingly share open communication protocols and tool interfaces. The Natural Language Interaction Protocol (\textbf{NLIP}, standardized as \textbf{ECMA-430}~\cite{ecma430} with explanatory architecture in \textbf{ECMA TR/113}~\cite{ecmatr113}, the \textbf{ECMA-434} Security Profiles standard~\cite{ecma434}, and the IETF \textbf{NLIP-DMSC} multi-agent draft~\cite{ietf_dmsc}) establishes a uniform multimodal message envelope (\texttt{NLIP\_Message} and \texttt{NLIP\_SubMessage}) across heterogeneous agent frameworks. Both ECMA TR/113 (\S5.1, \S11.4) and NLIP-DMSC frame NLIP as the application-layer analogue of \texttt{ntohs}/\texttt{htons}: on the wire, natural language decouples internal schemas across endpoints while LLMs translate wire messages into internal structured calls (such as Model Context Protocol (MCP) or repository operations). In the SafeOSE control-point architecture, every boundary crossing can host a pluggable Security Extension (SE): Type-1 (user-to-agent), Type-2 (agent-to-agent), and \textbf{Type-3 (agent-to-tool/model boundary)}.
 
 \paragraph{The Verification--Publication Gap in \texttt{nlip\_server}.}
 Inspecting the upstream \texttt{nlip-project} reference repositories (\texttt{nlip\_sdk} v0.1.3 and \texttt{nlip\_server} v0.1.3) reveals two concrete architectural gaps when agents invoke side-effecting tools:
@@ -118,7 +118,7 @@ It evaluates ten deterministic predicates in sequence:
 (7) repository, destination, profile, and command-hash equality (\texttt{PROFILE\_OR\_REPO\_MISMATCH}),
 (8) policy epoch and TTL freshness $t_{\text{now}} \le \text{rcpt}.\texttt{expires\_at}$ (\texttt{POLICY\_EPOCH\_STALE}, \texttt{RECEIPT\_EXPIRED}),
 (9) single-use unconsumed status (\texttt{RECEIPT\_ALREADY\_CONSUMED}), and
-(10) exact content-tree equality $\text{rcpt}.\texttt{tree\_oid} = \text{Tree}_{\text{oid}}$ with no newer failing run on $\text{Tree}_{\text{oid}}$ (\texttt{ARTIFACT\_TREE\_MISMATCH}, \texttt{SUPERSEDED\_BY\_FAILURE}).
+(10) exact commit and content-tree equality ($\text{rcpt}.\texttt{commit\_oid} = C_{\text{oid}}$ and $\text{rcpt}.\texttt{tree\_oid} = T_{\text{oid}}$) with no newer failing run on $T_{\text{oid}}$ (\texttt{ARTIFACT\_COMMIT\_MISMATCH}, \texttt{ARTIFACT\_TREE\_MISMATCH}, \texttt{SUPERSEDED\_BY\_FAILURE}).
 
 \subsection{Closing TOCTOU via Snapshot Verification and Commit-Pinned Push}
 A subtle flaw in working-tree hooks is that files can change while tests run or between test completion and \texttt{git push}. \texttt{nlip-receipts} eliminates both windows:
@@ -226,6 +226,10 @@ First, a receipt attests that the configured check command passed on $\text{Tree
 Ecma International. 2025. \emph{ECMA-430: Natural Language Interaction Protocol (NLIP)}, 1st Edition (December 2025).
 \bibitem{ecma434}
 Ecma International. 2025. \emph{ECMA-434: Security Profiles for Natural Language Interaction Protocol (NLIP)}, 1st Edition (December 2025).
+\bibitem{ecmatr113}
+Ecma International. 2025. \emph{ECMA TR/113: Explanatory Guide to the Natural Language Interaction Protocol (NLIP)}, 1st Edition (December 2025).
+\bibitem{ietf_dmsc}
+D. Verma, S. Hughes, L. Xing, R. Topaloglu, E. Bertino, A. Ratnaparkhi, S. Aiyagari, and T. Ross. 2026. \emph{Natural Language Interaction for Dynamic Multi-Agent Secure Collaboration (NLIP-DMSC)}. IETF Internet-Draft \texttt{draft-natural-language-multiagent-00}.
 \bibitem{nlip_security_guidelines}
 NLIP Security Working Group. 2025. \emph{NLIP Security Guidelines and Best Practices}. \url{https://github.com/nlip-project/security_guidelines}.
 \bibitem{hermes_receipts}
@@ -236,12 +240,12 @@ Santiago Torres-Arias et al. 2019. \emph{in-toto: Providing Farm-to-Table Guaran
 
 \appendix
 \section{Artifact Reproducibility Appendix}
-All code, schemas, adapters, tests, and evaluation scripts are released under the Apache-2.0 License at \url{https://github.com/cirwel/nlip-receipts}:
+All code, schemas, adapters, tests, and upstream standards proposals (\texttt{docs/UPSTREAM\_STANDARDS\_TEXT.md}) are released under the Apache-2.0 License at \url{https://github.com/cirwel/nlip-receipts}:
 \begin{lstlisting}
 # 0. One-command environment setup (installs nlip_sdk & nlip_server)
 make setup
 
-# 1. Run the 11 end-to-end pytest suites (HTTP, TOCTOU, Replay, Concurrency, 3 Adapters)
+# 1. Run the 13 end-to-end pytest suites (HTTP, TOCTOU, Replay, Concurrency, 3 Adapters)
 make test
 
 # 2. Reproduce the 2,080-run evaluation benchmark & ablation tables

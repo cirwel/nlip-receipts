@@ -1,21 +1,21 @@
 # NLIP Type-3 Verification Receipt Gate — Evaluation Results
 
 - **Trials per scenario:** 20 (200 adversarial trials + 60 benign trials = 260 runs per system; 2080 total evaluations)
-- **E2E Snapshot Verification (`git archive` + test runner):** p50 = `37.69 ms`, p95 = `40.03 ms`
-- **E2E Commit-Pinned Publication (`evaluate_type3_gate` + `git push`):** p50 = `54.09 ms`, p95 = `60.11 ms`
+- **E2E Snapshot Verification (`git archive` + test runner):** p50 = `36.03 ms`, p95 = `36.38 ms`
+- **E2E Commit-Pinned Publication (`evaluate_type3_gate` + `git push`):** p50 = `50.91 ms`, p95 = `55.79 ms`
 
 ## 1. Overall System Comparison & Ablations
 
 | System / Baseline | Attack Block Rate (%) | Unauth. Publish (%) | Benign Completion (%) | False Denial (%) | Gate Decision p50 (ms) | Gate Decision p99 (ms) | LLM Calls |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `B0_no_gate` | **0.0%** (0/200) | 100.0% | **100.0%** (60/60) | 0.0% | 0.257 | 0.342 | 0 |
-| `B1_prompt_only` | **10.0%** (20/200) | 90.0% | **100.0%** (60/60) | 0.0% | 0.270 | 0.473 | 0 |
-| `B2_submessage_trust` | **20.0%** (40/200) | 80.0% | **100.0%** (60/60) | 0.0% | 0.298 | 0.593 | 0 |
-| `B3_unbound_flag` | **30.0%** (60/200) | 70.0% | **100.0%** (60/60) | 0.0% | 0.321 | 0.704 | 0 |
-| `Abl_no_tree_bind` | **80.0%** (160/200) | 20.0% | **100.0%** (60/60) | 0.0% | 0.778 | 1.477 | 0 |
-| `Abl_no_caller_bind` | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.749 | 1.669 | 0 |
-| `Abl_no_profile_bind` | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.782 | 1.868 | 0 |
-| `S4_nlip_type3_gate` | **100.0%** (200/200) | 0.0% | **100.0%** (60/60) | 0.0% | 0.779 | 2.034 | 0 |
+| `B0_no_gate` | **0.0%** (0/200) | 100.0% | **100.0%** (60/60) | 0.0% | 0.247 | 0.373 | 0 |
+| `B1_prompt_only` | **10.0%** (20/200) | 90.0% | **100.0%** (60/60) | 0.0% | 0.275 | 0.481 | 0 |
+| `B2_submessage_trust` | **20.0%** (40/200) | 80.0% | **100.0%** (60/60) | 0.0% | 0.300 | 0.614 | 0 |
+| `B3_unbound_flag` | **30.0%** (60/200) | 70.0% | **100.0%** (60/60) | 0.0% | 0.322 | 0.737 | 0 |
+| `Abl_no_tree_bind` | **80.0%** (160/200) | 20.0% | **100.0%** (60/60) | 0.0% | 0.831 | 1.496 | 0 |
+| `Abl_no_caller_bind` | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.730 | 1.705 | 0 |
+| `Abl_no_profile_bind` | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.803 | 1.907 | 0 |
+| `S4_nlip_type3_gate` | **100.0%** (200/200) | 0.0% | **100.0%** (60/60) | 0.0% | 0.799 | 2.056 | 0 |
 
 ## 2. Per-Scenario Breakdown (Pass Rate %)
 
