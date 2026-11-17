@@ -422,6 +422,21 @@ def test_revoke_disable_and_clear_repo_fail_closed(tmp_path):
     assert ledger.get_receipt(rec2.receipt_id) is None
 
 
+def test_policy_row_deleted_outside_the_api_does_not_revive_old_receipts(tmp_path):
+    import sqlite3
+
+    e = _env(tmp_path)
+    ext, ledger = e["ext"], e["ledger"]
+    _, rec = ext.handle_proposal(_prop("verify", "alice"))
+    with sqlite3.connect(e["db"]) as conn:
+        conn.execute("DELETE FROM policies")
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                      allowed_callers=list(SECRETS))
+    dec, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.reason_code == "POLICY_EPOCH_STALE"
+    assert _prod_main(e["prod"]) is None
+
+
 def test_recreating_a_revoked_policy_does_not_revive_old_receipts(tmp_path):
     e = _env(tmp_path)
     ext, ledger = e["ext"], e["ledger"]

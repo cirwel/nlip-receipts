@@ -240,12 +240,21 @@ class ReceiptLedger:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Never reuse an epoch that a stored receipt carries, even if the policy row was
+                # removed outside the API: a re-created policy must not revive old receipts.
+                floor = int(
+                    conn.execute(
+                        """SELECT COALESCE(MAX(policy_epoch), 0) AS e FROM receipts
+                           WHERE repo_id = ? AND destination = ? AND profile_id = ?""",
+                        (repo_id, destination, profile_id),
+                    ).fetchone()["e"]
+                )
                 row = conn.execute(
                     """INSERT INTO policies (
                         repo_id, destination, profile_id, command_json, allowed_callers_json,
                         pinned_files_json, ttl_seconds, single_use, allow_tree_equiv,
                         allowed_branches_json, policy_epoch, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? + 1, ?)
                     ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
                         command_json = excluded.command_json,
                         allowed_callers_json = excluded.allowed_callers_json,
@@ -255,7 +264,7 @@ class ReceiptLedger:
                         allow_tree_equiv = excluded.allow_tree_equiv,
                         allowed_branches_json = excluded.allowed_branches_json,
                         revoked = 0,
-                        policy_epoch = policies.policy_epoch + 1,
+                        policy_epoch = MAX(policies.policy_epoch, ?) + 1,
                         updated_at = excluded.updated_at
                     RETURNING policy_epoch
                     """,
@@ -270,7 +279,9 @@ class ReceiptLedger:
                         1 if single_use else 0,
                         1 if allow_tree_equivalent_commits else 0,
                         json.dumps(branches),
+                        floor,
                         now,
+                        floor,
                     ),
                 ).fetchone()
                 next_epoch = int(row["policy_epoch"])
