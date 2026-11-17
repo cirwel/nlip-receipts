@@ -101,6 +101,20 @@ class ReceiptLedger:
         self._hmac_key = hmac_key or secrets.token_bytes(32)
         self.strict_caller_auth = strict_caller_auth
         self._init_db()
+        self._restrict_permissions()
+
+    def _restrict_permissions(self) -> None:
+        """Keep the ledger owner-only, including files created by older versions with the default
+        umask. Fails closed if a group- or world-writable ledger cannot be tightened."""
+        mode = self.db_path.stat().st_mode & 0o777
+        if mode & 0o077:
+            try:
+                os.chmod(self.db_path, 0o600)
+            except OSError as exc:
+                if mode & 0o022:
+                    raise PermissionError(
+                        f"ledger {self.db_path} is group/world-writable and could not be restricted"
+                    ) from exc
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5.0)

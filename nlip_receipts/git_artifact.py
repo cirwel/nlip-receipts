@@ -24,6 +24,7 @@ import tarfile
 import tempfile
 import time
 from dataclasses import dataclass
+from typing import Sequence
 
 _SAFE_REF_RE = re.compile(r"^(HEAD|[0-9a-fA-F]{7,64}|refs/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+)$")
 
@@ -80,9 +81,18 @@ def _sbpl_string(path: str) -> str:
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
-    """Wrap `command` in the host's OS sandbox, or return None if no backend is installed."""
+def _sandbox_argv(
+    command: list[str], snap_dir: str, protected_paths: Sequence[str] = ()
+) -> list[str] | None:
+    """Wrap `command` in the host's OS sandbox, or return None if no backend is installed.
+
+    `protected_paths` (the ledger, source repositories, destinations) stay unreadable even when
+    they sit inside an exposed interpreter prefix. Raises SandboxUnavailable if an interpreter
+    prefix is too broad to expose (a home directory or a top-level directory).
+    """
     snap = os.path.realpath(snap_dir)
+    mounts = _interpreter_mounts(command)
+    protected = sorted({os.path.realpath(p) for p in protected_paths if p})
     if sys.platform == "darwin":
         exe = shutil.which("sandbox-exec")
         if exe:
@@ -90,8 +100,13 @@ def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
                 snap=_sbpl_string(snap),
                 mach=" ".join(f"(global-name {_sbpl_string(n)})" for n in _DARWIN_MACH_ALLOW),
                 private=" ".join(f"(subpath {_sbpl_string(p)})" for p in _DARWIN_PRIVATE_ROOTS),
-                prefixes=" ".join(f"(subpath {_sbpl_string(p)})" for p in _interpreter_prefixes(command)),
+                prefixes=" ".join(f"(subpath {_sbpl_string(src)})" for src, _ in mounts),
             )
+            if protected:
+                # Last matching rule wins in SBPL, so these override the prefix allows above.
+                profile += "(deny file-read* file-write* {})\n".format(
+                    " ".join(f"(subpath {_sbpl_string(p)})" for p in protected)
+                )
             return [exe, "-p", profile, "--", *command]
         return None
     if sys.platform.startswith("linux"):
@@ -109,38 +124,77 @@ def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
                 "--proc", "/proc",
                 "--tmpfs", "/tmp",
             ]
-            for path in _linux_readonly_paths(command):
+            for path in _LINUX_SYSTEM_DIRS:
                 if os.path.islink(path):
                     argv += ["--symlink", os.readlink(path), path]
                 else:
                     argv += ["--ro-bind-try", path, path]
+            for src, dest in mounts:
+                # Mount at the canonical path and at the path the command names, so a
+                # symlinked prefix (e.g. /srv/current -> /opt/venv) still resolves inside.
+                argv += ["--ro-bind", src, src]
+                if dest != src:
+                    argv += ["--ro-bind", src, dest]
+            for path in protected:
+                if any(path == d or path.startswith(d + "/") for _, d in mounts) or any(
+                    path == s or path.startswith(s + "/") for s, _ in mounts
+                ):
+                    if os.path.isdir(path):
+                        argv += ["--tmpfs", path]
+                    else:
+                        argv += ["--ro-bind", "/dev/null", path]
             argv += ["--bind", snap, snap, "--chdir", snap, "--", *command]
             return argv
     return None
 
 
 _LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
+_SYSTEM_PREFIXES = _LINUX_SYSTEM_DIRS + ("/System", "/Library", "/Applications")
 
 
-def _interpreter_prefixes(command: list[str]) -> list[str]:
-    """Install prefixes of this interpreter and of `command[0]` (resolved through symlinks)."""
-    prefixes = {sys.prefix, sys.base_prefix, sys.exec_prefix}
+def _under_system_prefix(path: str) -> bool:
+    return any(path == d or path.startswith(d + "/") for d in _SYSTEM_PREFIXES)
+
+
+def _too_broad(path: str) -> bool:
+    home = os.path.realpath(os.path.expanduser("~"))
+    parts = [p for p in path.split("/") if p]
+    return (
+        len(parts) < 2
+        or path in (home, os.path.dirname(home), "/private/var", "/private/tmp", "/private/var/folders")
+        or home.startswith(path + "/")
+    )
+
+
+def _interpreter_mounts(command: list[str]) -> list[tuple[str, str]]:
+    """`(canonical_prefix, as_named_prefix)` for this interpreter and `command[0]`.
+
+    System directories are mounted separately and skipped here. A prefix that would expose a
+    home directory or a top-level directory raises SandboxUnavailable instead of widening the
+    sandbox: give the verify command a dedicated interpreter or virtualenv in that case.
+    """
+    candidates = {sys.prefix, sys.base_prefix, sys.exec_prefix}
     resolved = shutil.which(command[0]) if command else None
     if resolved:
-        for candidate in (resolved, os.path.realpath(resolved)):
-            prefixes.add(os.path.dirname(os.path.dirname(os.path.abspath(candidate))))
-    return sorted(os.path.realpath(p) for p in prefixes if p and os.path.realpath(p) != "/")
-
-
-def _linux_readonly_paths(command: list[str]) -> list[str]:
-    """System directories plus the install prefixes of this interpreter and of `command[0]`."""
-    out = list(_LINUX_SYSTEM_DIRS)
-    for prefix in _interpreter_prefixes(command):
-        if prefix and prefix != "/" and not any(
-            prefix == d or prefix.startswith(d + "/") for d in _LINUX_SYSTEM_DIRS
-        ):
-            out.append(prefix)
-    return out
+        for candidate in (os.path.abspath(resolved), os.path.realpath(resolved)):
+            if not _under_system_prefix(candidate):
+                candidates.add(os.path.dirname(os.path.dirname(candidate)))
+    mounts: set[tuple[str, str]] = set()
+    for cand in candidates:
+        if not cand:
+            continue
+        dest = os.path.abspath(cand)
+        src = os.path.realpath(cand)
+        if _under_system_prefix(src) and dest == src:
+            continue
+        for path in {src, dest}:
+            if _too_broad(path):
+                raise SandboxUnavailable(
+                    f"interpreter prefix {path!r} is too broad to expose to verify; "
+                    "run the verify command from a dedicated interpreter or virtualenv"
+                )
+        mounts.add((src, dest))
+    return sorted(mounts)
 
 
 def sandbox_available() -> bool:
@@ -407,6 +461,7 @@ def run_verification_in_snapshot(
     pinned_file_sha256: dict[str, str] | None = None,
     timeout: float = 15.0,
     sandbox: str = "required",
+    protected_paths: Sequence[str] = (),
 ) -> tuple[int, float, str, str, str]:
     """Run `command` inside a manifest-verified isolated temporary snapshot of `tree_oid`.
 
@@ -449,7 +504,7 @@ def run_verification_in_snapshot(
         }
         argv = command
         if sandbox == "required":
-            wrapped = _sandbox_argv(command, snap_dir)
+            wrapped = _sandbox_argv(command, snap_dir, protected_paths)
             if wrapped is None:
                 raise SandboxUnavailable("OS sandbox backend disappeared after probe")
             argv = wrapped

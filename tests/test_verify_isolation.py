@@ -106,16 +106,17 @@ def test_verify_code_cannot_push_to_destination(host_dir):
             "app.py": textwrap.dedent(
                 f"""
                 import subprocess
-                subprocess.run(["git", "-C", {str(e['work'])!r}, "push", "-q", {str(e['prod'])!r},
-                                "HEAD:refs/heads/main"])
-                def add(a, b):
-                    return -999
+                import subprocess
+                r = subprocess.run(["git", "-C", {str(e['work'])!r}, "push", "-q", {str(e['prod'])!r},
+                                    "HEAD:refs/heads/main"])
+                raise SystemExit(7 if r.returncode != 0 else 8)  # 7: push attempted and refused
                 """
             )
         },
     )
-    dec, _ = e["ext"].handle_proposal(_prop("verify", "mallory"))
+    dec, rec = e["ext"].handle_proposal(_prop("verify", "mallory"))
     assert dec.reason_code == "VERIFICATION_CHECK_FAILED"
+    assert rec.exit_code == 7  # the payload ran, attempted the push, and git failed
     assert _prod_main(e["prod"]) is None
 
 
@@ -130,12 +131,14 @@ def test_verify_code_cannot_rewrite_ledger(host_dir):
         e["work"],
         {
             "test_ok.py": (
-                f"import sqlite3\nc = sqlite3.connect({str(e['db'])!r})\n"
-                "c.execute('update receipts set consumed = 0'); c.commit()\n"
+                f"import sqlite3\ntry:\n    c = sqlite3.connect({str(e['db'])!r})\n"
+                "    c.execute('update receipts set consumed = 0'); c.commit()\n"
+                "except sqlite3.Error:\n    raise SystemExit(7)\nraise SystemExit(8)\n"
             )
         },
     )
-    ext.handle_proposal(_prop("verify", "mallory"))
+    _, tamper = ext.handle_proposal(_prop("verify", "mallory"))
+    assert tamper.exit_code == 7  # the payload ran and its ledger write failed
     replay, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id, artifact_ref=old_head))
     assert replay.action == "deny"
     assert replay.reason_code == "RECEIPT_ALREADY_CONSUMED"
@@ -209,6 +212,55 @@ def test_verify_code_cannot_connect_to_host_unix_socket(tmp_path):
         srv.close()
         os.unlink(path)
         os.rmdir(sock_dir)
+
+
+def test_protected_paths_stay_hidden_inside_an_exposed_prefix(host_dir):
+    """A ledger or repository inside an interpreter prefix (e.g. a virtualenv at a repo root)
+    must stay unreadable even though the rest of the prefix is exposed."""
+    import os
+
+    e = _env(host_dir)
+    prefix = host_dir / "py"
+    (prefix / "bin").mkdir(parents=True)
+    os.symlink(os.path.realpath(sys.executable), prefix / "bin" / "python")
+    (prefix / "visible.txt").write_text("V")  # ord 86
+    secret = prefix / "ledger-copy.db"
+    secret.write_text("S")  # ord 83
+    ext = Type3ReceiptExtension(ledger=e["ledger"], repos={"svc": str(e["work"])}, destinations={"prod": str(e["prod"])})
+    ext._protected_paths = lambda: [str(secret)]  # type: ignore[method-assign]
+    script = (
+        f"import sys\ntry:\n    sys.exit(ord(open({str(secret)!r}).read(1)))\nexcept OSError:\n    pass\n"
+        f"sys.exit(ord(open({str(prefix / 'visible.txt')!r}).read(1)))\n"
+    )
+    e["ledger"].set_policy(repo_id="svc", destination="prod", profile_id="p",
+                           command=[str(prefix / "bin" / "python"), "-c", script], allowed_callers=list(SECRETS))
+    _, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert rec.exit_code == 86  # prefix mounted, protected file inside it hidden
+
+
+def test_home_directory_prefix_is_refused(host_dir, monkeypatch):
+    import os
+
+    e = _env(host_dir)
+    (host_dir / "bin").mkdir()
+    os.symlink(os.path.realpath(sys.executable), host_dir / "bin" / "python")
+    monkeypatch.setenv("HOME", str(host_dir))
+    e["ledger"].set_policy(repo_id="svc", destination="prod", profile_id="p",
+                           command=[str(host_dir / "bin" / "python"), "test_ok.py"], allowed_callers=list(SECRETS))
+    dec, rec = e["ext"].handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "SANDBOX_UNAVAILABLE"
+    assert rec is None
+
+
+def test_existing_world_writable_ledger_is_restricted(tmp_path):
+    import os
+    import stat
+
+    db = tmp_path / "old.db"
+    ReceiptLedger(db)
+    os.chmod(db, 0o666)
+    ReceiptLedger(db)
+    assert stat.S_IMODE(os.stat(db).st_mode) == 0o600
 
 
 def test_verify_fails_closed_without_sandbox(tmp_path, monkeypatch):

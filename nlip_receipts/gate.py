@@ -318,6 +318,12 @@ class Type3ReceiptExtension:
         self.repos = {k: os.path.realpath(v) for k, v in repos.items()}
         self.destinations = {k: os.path.realpath(v) for k, v in destinations.items()}
 
+    def _protected_paths(self) -> list[str]:
+        """Paths the verify sandbox must never expose, even inside an interpreter prefix."""
+        db = str(self.ledger.db_path.resolve())
+        ledger_files = [db, db + "-wal", db + "-shm", db + "-journal"]
+        return [*ledger_files, *self.repos.values(), *self.destinations.values()]
+
     def handle_proposal(
         self, proposal: ToolCallProposal, *, now: Optional[float] = None
     ) -> tuple[Type3Decision, Optional[VerificationReceipt]]:
@@ -424,6 +430,7 @@ class Type3ReceiptExtension:
                     policy.command,
                     pinned_file_sha256=policy.pinned_file_sha256,
                     sandbox=self.verify_sandbox,
+                    protected_paths=self._protected_paths(),
                 )
             except ArtifactError as exc:
                 decision = Type3Decision(
