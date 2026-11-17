@@ -89,6 +89,7 @@ class Type3Decision(BaseModel):
     policy_epoch: int = 0
     latency_ms: float = 0.0
     published_ref: Optional[str] = None
+    conversation_id: Optional[str] = None
 
 
 def extract_caller_credentials(msg: NLIP_Message) -> tuple[str, Optional[str], NLIP_Message]:

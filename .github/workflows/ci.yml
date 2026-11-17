@@ -37,8 +37,11 @@ jobs:
       - name: Run pytest suite
         run: pytest -v
 
-      - name: Run 2,080-trial reproducible evaluation & ablation benchmark
+      - name: Run decision-function ablation
         run: python eval/benchmark.py
+
+      - name: Run end-to-end attack suite (NLIP round trip, sandboxed verify, git push)
+        run: python eval/e2e_attacks.py
 
       - name: Run 7-step end-to-end NLIP Type-3 demo
         run: python demo.py

@@ -1,10 +1,15 @@
-"""Reproducible Adversarial & Ablation Evaluation Harness for `nlip-receipts` (`make eval`).
+"""Decision-function ablation for `nlip-receipts` (`make eval`, part 1 of 2).
 
-Evaluates 5 baselines + 3 component ablations across 10 adversarial attack scenarios (A01-A10)
-and 3 benign workflows (B01-B03), measuring:
-- Attack Block Rate (%) and Unauthorized Destination Mutation Rate (%)
-- Benign Completion Rate (%) and False Denial Rate (%)
-- Gate Decision Latency (p50, p95, p99 in ms) and E2E Snapshot Verify + Publish Latency
+Scope: this harness calls `evaluate_type3_gate()` in-process on seeded ledger states. Receipts are
+written directly with `ReceiptLedger.issue_receipt`; no NLIP message, sandboxed `verify` or
+`git push` is involved, and "unauthorized publish" means the decision function returned allow.
+The baselines (B0-B3) are simulated decision policies, not separate systems: B0 allows every call,
+B1 refuses only when no success claim is present, B2 trusts any receipt submessage, B3 trusts a
+per-scenario "any run passed" flag. The ablations disable one binding inside the real gate.
+The cases are deterministic: 13 scenarios x 8 systems = 104 distinct cases, each repeated 20 times
+to sample decision latency. A05 shares A04's committed-mutation case here.
+
+The real attack path, end to end, is measured by `eval/e2e_attacks.py` (part 2).
 """
 
 from __future__ import annotations
@@ -739,9 +744,12 @@ def run_benchmark(trials_per_scenario: int = 20) -> dict[str, Any]:
 def format_markdown_report(results: dict[str, Any]) -> str:
     e2e = results["e2e_verify_and_publish_latency_ms"]
     lines = [
-        "# NLIP Type-3 Verification Receipt Gate — Evaluation Results",
+        "# Decision-Function Ablation (seeded ledger states, simulated baselines)",
         "",
-        f"- **Trials per scenario:** {results['trials_per_scenario']} "
+        "Calls `evaluate_type3_gate()` directly; see `eval/e2e_attacks.py` for the end-to-end suite. "
+        f"{len(SCENARIOS) * len(SYSTEMS)} distinct deterministic cases, each repeated to sample latency.",
+        "",
+        f"- **Repeats per case:** {results['trials_per_scenario']} "
         f"({results['trials_per_scenario'] * 10} adversarial trials + "
         f"{results['trials_per_scenario'] * 3} benign trials = "
         f"{results['trials_per_scenario'] * 13} runs per system; "

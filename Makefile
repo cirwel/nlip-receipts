@@ -20,6 +20,7 @@ test:
 
 eval:
 	PYTHONPATH=. $(PYTHON) eval/benchmark.py
+	PYTHONPATH=. $(PYTHON) eval/e2e_attacks.py
 
 demo:
 	PYTHONPATH=. $(PYTHON) demo.py

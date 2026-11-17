@@ -16,11 +16,12 @@ The Focus Area 3 specification requires that a Security Extension *"cannot see t
 2. **Local state recorded from earlier interactions:** Stored in the SE-protected SQLite ledger (`ReceiptLedger`), which records HMAC-SHA256-authenticated verification receipts issued exclusively by the Type-3 snapshot verifier.
 3. **The policy implemented by the team:** Explicit per-repository, per-destination `PolicyConfig` specifying the verification argv vector, allowed caller identities, receipt TTL, single-use semantics, and `policy_epoch`.
 
-`evaluate_type3_gate()` in [`nlip_receipts/gate.py`](nlip_receipts/gate.py) is a **pure function** of `(proposal, resolved_commit, resolved_tree, receipt, latest_tree_receipt, receipt_hmac_valid, policy, now)`:
-- **0 LLM calls** on the enforcement path (`0.23 ms` median gate decision latency).
+`evaluate_type3_gate()` in [`nlip_receipts/gate.py`](nlip_receipts/gate.py) is a **pure function** of `(proposal, resolved_commit, resolved_tree, receipt, latest_tree_receipt, receipt_hmac_valid, policy, now, caller_authenticated)`:
+- **0 LLM calls** on the enforcement path. The decision, including its ledger lookups, takes about 1 ms; a real `publish` is dominated by the `git push` (tens to a couple of hundred ms, depending on host load) and `verify` by the sandboxed test run (see §5).
+- **Sandboxed verification:** the verify command imports code from the untrusted tree, so it runs under `sandbox-exec` (macOS) or `bwrap` (Linux) with no network, no Unix sockets, no host writes, and no view of the ledger or other repositories. See [`SECURITY.md`](SECURITY.md#threat-model-and-limitations) for the threat model and the remaining limitation.
 - **Snapshot-isolated verification (`git archive <tree_oid>`):** Verification runs inside an isolated temporary directory exported from the immutable Git tree object rather than the live working tree, eliminating concurrent working-tree race conditions.
 - **Commit-pinned publication (`git push <dest> <commit_oid>:refs/heads/<branch>`):** Publication pushes the exact verified commit object rather than a mutable branch ref, eliminating post-verification TOCTOU mutations.
-- **Multi-harness portability:** Includes adapters ([`nlip_receipts/adapters.py`](nlip_receipts/adapters.py)) for **Claude Code** (`PreToolUse`), **OpenAI Codex CLI** (`codex exec`), and **Google Antigravity (`agy`)**, plus standard HTTP `POST /nlip/` clients.
+- **Harness adapters:** [`nlip_receipts/adapters.py`](nlip_receipts/adapters.py) translates tool-call payloads shaped like a Claude Code `PreToolUse` hook event, a Codex tool call and an Antigravity (`agy`) tool call into NLIP messages, and the decision back into each shape. They run in-process; wiring them into the live harnesses (hook scripts, CLI configuration) is not included. Any HTTP client can also `POST /nlip/` directly.
 
 ---
 
@@ -33,7 +34,7 @@ The Focus Area 3 specification requires that a Security Extension *"cannot see t
 | **ECMA-434 §7.1.3 & Annex B** | Ethical-by-Design | Machine-queryable disclosure and [`ETHICS.md`](ETHICS.md). |
 | **ECMA-434 §7.2.2** | NLIP Client Authorization | Enforces caller allowlists and destination-specific verification profiles before side-effecting tool execution. |
 | **ECMA-434 §7.2.3** | Privilege Misuse Prevention | Binds receipts to `caller_id`, `repo_id`, `profile_id`, and `command_sha256` to block Confused-Deputy cross-caller replay and staging-to-production target substitution. |
-| **ECMA-434 §7.2.4** | Observability & Audit | Append-only, SHA-256 hash-chained decision ledger (`decisions` table) correlated with NLIP conversation tokens. |
+| **ECMA-434 §7.2.4** | Observability & Audit | SHA-256 hash-chained decision log (`decisions` table) recording the NLIP conversation token of each request. The chain is unkeyed, so it detects partial edits but not a full rewrite by someone with write access to the ledger. |
 | **ECMA-434 §7.2.7 & Annex A** | Secure-by-Design Disclosure | Provided in [`SECURITY.md`](SECURITY.md). |
 | **ECMA-434 §7.3.2** | Runtime Agent Behaviour Controls | Deterministic Type-3 reference monitor mediating `verify` and `publish` calls. |
 | **Proposed SCO 7.3.4** | *Execution-Attested Side-Effect Gating* | **New SCO Proposal:** Side-effecting tool invocations across an NLIP boundary must present a non-forgeable reference to a passing verification run executed by a trusted supervisor over the exact immutable artifact digest being published. |
@@ -46,7 +47,7 @@ This project builds on the author's prior open-source Hermes plugin [`hermes-rec
 - **NLIP Type-3 Security Extension architecture** for `nlip_server` / `nlip_sdk` using ECMA-430 `structured`, `token`, and `control` submessages.
 - **Snapshot-isolated verification (`git archive`)** and **commit-pinned publication (`<commit_oid>:refs/heads/<branch>`)**, closing the shell-command parsing and mutable working-tree TOCTOU limitations of terminal-hook gates.
 - **Multi-caller Confused-Deputy protection, destination/profile binding, policy epochs, single-use receipt consumption, and hash-chained audit logging** mapped to ECMA-434 SCOs.
-- **Cross-harness adapters** for Claude Code, Codex CLI, and Antigravity (`agy`), plus the **2,080-run adversarial & ablation evaluation suite**.
+- **Harness adapter shapes** for Claude Code, Codex CLI, and Antigravity (`agy`) tool calls, the **end-to-end attack suite** (`eval/e2e_attacks.py`), and the **decision-function ablation** (`eval/benchmark.py`).
 
 ---
 
@@ -64,7 +65,8 @@ make setup
 
 ### Run Unit & Integration Tests (`make test`)
 ```bash
-make test   # 9/9 pytest suites (HTTP, TOCTOU, Confused-Deputy, Cross-Destination, Duplicate-Auth, 8-Thread Race, 3 Adapters)
+make test   # 31 tests + 1 expected failure (documented limitation): HTTP, TOCTOU, Confused-Deputy, cross-destination,
+            # duplicate auth, 8-thread race, adapter shapes, verify sandbox isolation, caller auth, branch allowlist
 ```
 
 ### Run End-to-End Interactive Demo (`make demo`)
@@ -77,24 +79,40 @@ make demo
 make eval
 PYTHONPATH=. .venv/bin/python eval/live_agent_eval.py   # Optional: live LLM IPI evaluation (requires local Ollama)
 ```
-Outputs machine-readable metrics to [`eval/results/evaluation_summary.json`](eval/results/evaluation_summary.json), [`eval/results/live_agent_traces.json`](eval/results/live_agent_traces.json), and formatted tables to [`eval/results/evaluation_report.md`](eval/results/evaluation_report.md).
+`make eval` runs two harnesses:
+- [`eval/benchmark.py`](eval/benchmark.py) → [`evaluation_report.md`](eval/results/evaluation_report.md) / [`evaluation_summary.json`](eval/results/evaluation_summary.json): a decision-function ablation over seeded ledger states.
+- [`eval/e2e_attacks.py`](eval/e2e_attacks.py) → [`e2e_attack_report.md`](eval/results/e2e_attack_report.md) / [`e2e_attack_summary.json`](eval/results/e2e_attack_summary.json): the end-to-end attack suite.
+
+The optional live LLM run writes [`eval/results/live_agent_traces.json`](eval/results/live_agent_traces.json).
 
 ---
 
 ## 5. Summary of Evaluation Results (`make eval`)
 
-Across **2,080 total evaluations** (10 adversarial scenarios × 20 trials = 200 attack runs, plus 3 benign workflows × 20 trials = 60 benign runs per system):
+Measured on macOS (`sandbox-exec`) under background load; CI reproduces the same pass/fail results on Linux (`bwrap`) on every push.
 
-| System / Baseline | Attack Block Rate (%) | Unauth. Publish (%) | Benign Completion (%) | False Denial (%) | Gate Decision p50 (ms) | Gate Decision p99 (ms) | LLM Calls |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `B0_no_gate` (Vanilla `nlip_server`) | **0.0%** (0/200) | 100.0% | **100.0%** (60/60) | 0.0% | 0.228 | 0.321 | 0 |
-| `B1_prompt_only` (Self-report check) | **10.0%** (20/200) | 90.0% | **100.0%** (60/60) | 0.0% | 0.227 | 0.302 | 0 |
-| `B2_submessage_trust` (Unverified submsg) | **20.0%** (40/200) | 80.0% | **100.0%** (60/60) | 0.0% | 0.240 | 0.327 | 0 |
-| `B3_unbound_flag` (Session pass boolean) | **30.0%** (60/200) | 70.0% | **100.0%** (60/60) | 0.0% | 0.229 | 0.327 | 0 |
-| `Abl_no_tree_bind` (No `tree_oid` bind) | **80.0%** (160/200) | 20.0% | **100.0%** (60/60) | 0.0% | 0.291 | 0.662 | 0 |
-| `Abl_no_caller_bind` (No `caller_id` bind) | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.262 | 0.690 | 0 |
-| `Abl_no_profile_bind` (No profile bind) | **90.0%** (180/200) | 10.0% | **100.0%** (60/60) | 0.0% | 0.249 | 0.642 | 0 |
-| **`S4_nlip_type3_gate` (Ours)** | **100.0%** (200/200) | **0.0%** | **100.0%** (60/60) | **0.0%** | **0.232** | **0.655** | **0** |
+### 5.1 End-to-end attack suite (`eval/e2e_attacks.py`)
+Every attempt is an ECMA-430 message POSTed to the `nlip_server` app, with sandboxed `verify` and real `git push` into bare destination repositories. An attack counts as blocked only if the destinations show none of its effect. Each scenario runs 3 times in a fresh environment; the suite is deterministic, so the repeats check stability, not statistics.
+
+- **Attacks blocked: 16/16 scenarios.** A01–A10 from the paper (A08 split into expiry and policy-epoch rotation), plus V01–V05: code run by `verify` pushing to the destination, rewriting the ledger, and reading host files; impersonating a caller without its secret; and publishing to a branch outside the policy allowlist.
+- **Benign workflows completed: 3/3**: verify→publish; failing commit → fix → re-verify → publish; and the three adapter shapes each verifying and publishing.
+- **Latency:** `verify` p50 137 ms (git archive, manifest check, sandboxed test run); allowed `publish` p50 178 ms (gate plus `git push`). These depend heavily on host load: an earlier run on the same machine under lighter load measured 86 ms and 78 ms.
+
+### 5.2 Decision-function ablation (`eval/benchmark.py`)
+This calls `evaluate_type3_gate()` directly on seeded ledger states. Receipts are written straight into the ledger, and no NLIP message, `verify` or `git push` is involved. The baselines are simulated decision policies: `B0` allows everything, `B1` refuses only when no success claim is present, `B2` trusts any receipt submessage, and `B3` trusts an "any run passed" flag. The ablations each remove one binding from the real gate. There are 13 scenarios × 8 systems = 104 deterministic cases, each repeated 20 times to sample latency (2,080 decisions).
+
+| System | Attack block rate | Benign completion | Decision p50 (ms) | Decision p99 (ms) |
+|---|---:|---:|---:|---:|
+| `B0_no_gate` (simulated) | 0% (0/200) | 100% (60/60) | 0.36 | 0.57 |
+| `B1_prompt_only` (simulated) | 10% (20/200) | 100% (60/60) | 0.42 | 0.72 |
+| `B2_submessage_trust` (simulated) | 20% (40/200) | 100% (60/60) | 0.45 | 0.87 |
+| `B3_unbound_flag` (simulated) | 30% (60/200) | 100% (60/60) | 0.46 | 1.05 |
+| `Abl_no_tree_bind` | 80% (160/200) | 100% (60/60) | 1.13 | 2.13 |
+| `Abl_no_caller_bind` | 90% (180/200) | 100% (60/60) | 1.08 | 2.44 |
+| `Abl_no_profile_bind` | 90% (180/200) | 100% (60/60) | 1.24 | 2.70 |
+| **`S4_nlip_type3_gate`** | **100% (200/200)** | **100% (60/60)** | **1.13** | **2.85** |
+
+All systems perform the same ledger lookups, so the gate's own checks add roughly 0.8 ms over `B0`. In this harness A05 reuses A04's committed-mutation case; the end-to-end suite tests an actual uncommitted working-tree edit.
 
 ---
 

@@ -77,6 +77,7 @@ _DDL = (
         commit_oid TEXT NOT NULL,
         tree_oid TEXT NOT NULL,
         receipt_id TEXT,
+        conversation_id TEXT,
         sco_refs_json TEXT NOT NULL,
         latency_ms REAL NOT NULL,
         prev_hash TEXT NOT NULL,
@@ -131,6 +132,9 @@ class ReceiptLedger:
             try:
                 for stmt in _DDL:
                     conn.execute(stmt)
+                dcols = {r["name"] for r in conn.execute("PRAGMA table_info(decisions)")}
+                if "conversation_id" not in dcols:
+                    conn.execute("ALTER TABLE decisions ADD COLUMN conversation_id TEXT")
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
                 if "allowed_branches_json" not in cols:
                     conn.execute(
@@ -305,6 +309,30 @@ class ReceiptLedger:
             allowed_branches=json.loads(row["allowed_branches_json"] or '["main"]'),
             policy_epoch=int(row["policy_epoch"]),
         )
+
+    def revoke_policy(self, repo_id: str, destination: str, profile_id: str = "default") -> bool:
+        """Delete a policy. Later `verify`/`publish` calls fail closed with POLICY_NOT_FOUND, and
+        receipts issued under it can no longer be consumed (`mark_consumed` needs the live policy).
+        Returns True if a policy was removed."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            cur = conn.execute(
+                "DELETE FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                (repo_id, destination, profile_id),
+            )
+            return cur.rowcount > 0
+
+    def disable_destination(self, destination: str) -> int:
+        """Revoke every policy that publishes to `destination`. Returns the number removed."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            return conn.execute("DELETE FROM policies WHERE destination = ?", (destination,)).rowcount
+
+    def clear_repo(self, repo_id: str) -> tuple[int, int]:
+        """Purge policies and receipts for `repo_id`. The hash-chained decision log is kept, since
+        deleting rows from it would break the chain. Returns (policies_removed, receipts_removed)."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            pol = conn.execute("DELETE FROM policies WHERE repo_id = ?", (repo_id,)).rowcount
+            rec = conn.execute("DELETE FROM receipts WHERE repo_id = ?", (repo_id,)).rowcount
+            return pol, rec
 
     # ── Receipt Issuance & Lookup ───────────────────────────────────────────
     def issue_receipt(
@@ -521,6 +549,7 @@ class ReceiptLedger:
                     decision.commit_oid,
                     decision.tree_oid,
                     decision.receipt_id or "",
+                    decision.conversation_id or "",
                     sco_json,
                     f"{decision.latency_ms:.3f}",
                 ]
@@ -530,8 +559,8 @@ class ReceiptLedger:
                     """INSERT INTO decisions (
                         decision_id, recorded_at, action, reason_code, operation,
                         repo_id, caller_id, destination, commit_oid, tree_oid,
-                        receipt_id, sco_refs_json, latency_ms, prev_hash, entry_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        receipt_id, conversation_id, sco_refs_json, latency_ms, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         decision.decision_id,
                         now,
@@ -544,6 +573,7 @@ class ReceiptLedger:
                         decision.commit_oid,
                         decision.tree_oid,
                         decision.receipt_id,
+                        decision.conversation_id,
                         sco_json,
                         decision.latency_ms,
                         prev_hash,

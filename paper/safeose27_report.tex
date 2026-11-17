@@ -25,7 +25,7 @@
 \begin{abstract}
 Open-source AI agents increasingly invoke side-effecting tools (such as publishing code, creating pull requests, or mutating shared repositories) across standardized communication layers like the Natural Language Interaction Protocol (NLIP, ECMA-430). However, current reference implementations (\texttt{nlip\_server} and \texttt{nlip\_sdk}) provide no communication-layer reference monitor at the Type-3 tool boundary, leaving side-effecting operations vulnerable to unverified execution, agent self-report fabrication (\emph{``all tests passed''}), forged protocol submessages, Confused-Deputy replay, and Time-of-Check-to-Time-of-Use (TOCTOU) working-tree mutations.
 
-We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Security Extension (SE) for NLIP that enforces \emph{execution-attested side-effect gating}. Under \texttt{nlip-receipts}, a publication tool call (\texttt{publish}) is permitted if and only if an authorized caller references an immutable Git tree digest (\texttt{tree\_oid}) for which the trusted Type-3 verifier previously recorded a passing check (\texttt{verify}) inside an isolated archive snapshot (\texttt{git archive}) under the active policy epoch and target profile. Strictly satisfying the SafeOSE Focus Area~3 Fit Test, the gate decision is a pure, zero-LLM-call function of the structured NLIP tool-call submessage, SE-protected SQLite ledger state, and explicit operator policy. Across 2,080 benchmark evaluations spanning 10 adversarial attack classes and 3 benign workflows, \texttt{nlip-receipts} blocks 100\% of unauthorized publication attempts with 0\% false denials, adds $0.76\text{ ms}$ median gate decision latency, and interoperates identically across Claude Code, OpenAI Codex CLI, and Google Antigravity (\texttt{agy}) adapters. Finally, we map our controls to ECMA-434 and propose a new Security Countermeasure and Objective (\textbf{SCO 7.3.4: Execution-Attested Side-Effect Gating}).
+We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Security Extension (SE) for NLIP that enforces \emph{execution-attested side-effect gating}. Under \texttt{nlip-receipts}, a publication tool call (\texttt{publish}) is permitted if and only if an authorized caller references an immutable Git tree digest (\texttt{tree\_oid}) for which the trusted Type-3 verifier previously recorded a passing check (\texttt{verify}) inside an isolated archive snapshot (\texttt{git archive}) under the active policy epoch and target profile. Strictly satisfying the SafeOSE Focus Area~3 Fit Test, the gate decision is a pure, zero-LLM-call function of the structured NLIP tool-call submessage, SE-protected SQLite ledger state, and explicit operator policy. Because the code being verified is itself untrusted, verification runs inside an OS sandbox (\texttt{sandbox-exec} on macOS, bubblewrap on Linux). In an end-to-end suite that sends real NLIP messages, runs sandboxed verification and performs real \texttt{git push}es, \texttt{nlip-receipts} blocks all 16 attack scenarios, including attempts by the verified code to escape verification, and completes all 3 benign workflows. A decision-function ablation shows that each receipt binding is necessary. The gate decision takes about 1~ms; a publication is dominated by its \texttt{git push} (178~ms p50 on a loaded laptop). Thin adapters translate Claude Code, Codex CLI and Antigravity (\texttt{agy}) tool-call shapes into NLIP messages. Finally, we map our controls to ECMA-434 and propose a new Security Countermeasure and Objective (\textbf{SCO 7.3.4: Execution-Attested Side-Effect Gating}).
 \end{abstract}
 
 \begin{document}
@@ -34,7 +34,7 @@ We present \texttt{nlip-receipts}, a pluggable, framework-agnostic Type-3 Securi
 \maketitle
 
 \section{Introduction \& Problem Definition}
-As AI agents transition from conversational assistants to autonomous software operators, they increasingly share open communication protocols and tool interfaces. The Natural Language Interaction Protocol (\textbf{NLIP}, standardized as \textbf{ECMA-430}~\cite{ecma430} with explanatory architecture in \textbf{ECMA TR/113}~\cite{ecmatr113}, the \textbf{ECMA-434} Security Profiles standard~\cite{ecma434}, and the IETF \textbf{NLIP-DMSC} multi-agent draft~\cite{ietf_dmsc}) establishes a uniform multimodal message envelope (\texttt{NLIP\_Message} and \texttt{NLIP\_SubMessage}) across heterogeneous agent frameworks. Both ECMA TR/113 (\S5.1, \S11.4) and NLIP-DMSC frame NLIP as the application-layer analogue of \texttt{ntohs}/\texttt{htons}: on the wire, natural language decouples internal schemas across endpoints while LLMs translate wire messages into internal structured calls (such as Model Context Protocol (MCP) or repository operations). In the SafeOSE control-point architecture, every boundary crossing can host a pluggable Security Extension (SE): Type-1 (user-to-agent), Type-2 (agent-to-agent), and \textbf{Type-3 (agent-to-tool/model boundary)}.
+As AI agents transition from conversational assistants to autonomous software operators, they increasingly share open communication protocols and tool interfaces. The Natural Language Interaction Protocol (\textbf{NLIP}, standardized as \textbf{ECMA-430}~\cite{ecma430} with explanatory architecture in \textbf{ECMA TR/113}~\cite{ecmatr113}, the \textbf{ECMA-434} Security Profiles standard~\cite{ecma434}, and the \textbf{NLIP-DMSC} multi-agent working draft~\cite{ietf_dmsc}) establishes a uniform multimodal message envelope (\texttt{NLIP\_Message} and \texttt{NLIP\_SubMessage}) across heterogeneous agent frameworks. Both ECMA TR/113 (\S5.1, \S11.4) and NLIP-DMSC frame NLIP as the application-layer analogue of \texttt{ntohs}/\texttt{htons}: on the wire, natural language decouples internal schemas across endpoints while LLMs translate wire messages into internal structured calls (such as Model Context Protocol (MCP) or repository operations). In the SafeOSE control-point architecture, every boundary crossing can host a pluggable Security Extension (SE): Type-1 (user-to-agent), Type-2 (agent-to-agent), and \textbf{Type-3 (agent-to-tool/model boundary)}.
 
 \paragraph{The Verification--Publication Gap in \texttt{nlip\_server}.}
 Inspecting the upstream \texttt{nlip-project} reference repositories (\texttt{nlip\_sdk} v0.1.3 and \texttt{nlip\_server} v0.1.3) reveals two concrete architectural gaps when agents invoke side-effecting tools:
@@ -44,27 +44,30 @@ Inspecting the upstream \texttt{nlip-project} reference repositories (\texttt{nl
 \end{enumerate}
 
 \paragraph{Prior-Work Disclosure.}
-This work builds on the author's prior single-harness Hermes plugin \texttt{hermes-receipts}~\cite{hermes_receipts}, which introduced working-tree fingerprinting to gate terminal \texttt{git push} commands inside a single CLI. However, terminal-hook command parsing is inherently fragile against shell aliasing, alternate executables, and concurrent working-tree mutations during test execution. For the NDSS SafeOSE~'27 Hackathon, we designed and built \texttt{nlip-receipts} from the ground up as a standards-conformant \textbf{ECMA-430/ECMA-434 Type-3 Security Extension} featuring: (i) typed NLIP \texttt{structured} submessage mediation rather than shell-string classification, (ii) \textbf{snapshot-isolated verification} (\texttt{git archive}) and \textbf{commit-pinned publication} (\texttt{<commit\_oid>:refs/heads/<branch>}) that eliminate mid-run and post-check TOCTOU windows, (iii) multi-caller Confused-Deputy and destination-profile binding, and (iv) cross-harness adapters for Claude Code, Codex CLI, and Antigravity (\texttt{agy}).
+This work builds on the author's prior single-harness Hermes plugin \texttt{hermes-receipts}~\cite{hermes_receipts}, which introduced working-tree fingerprinting to gate terminal \texttt{git push} commands inside a single CLI. However, terminal-hook command parsing is inherently fragile against shell aliasing, alternate executables, and concurrent working-tree mutations during test execution. For the NDSS SafeOSE~'27 Hackathon, we designed and built \texttt{nlip-receipts} from the ground up as a standards-conformant \textbf{ECMA-430/ECMA-434 Type-3 Security Extension} featuring: (i) typed NLIP \texttt{structured} submessage mediation rather than shell-string classification, (ii) \textbf{snapshot-isolated verification} (\texttt{git archive}) and \textbf{commit-pinned publication} (\texttt{<commit\_oid>:refs/heads/<branch>}) that eliminate mid-run and post-check TOCTOU windows, (iii) multi-caller Confused-Deputy and destination-profile binding, (iv) sandboxed execution of the verification command, and (v) adapters translating Claude Code, Codex CLI, and Antigravity (\texttt{agy}) tool-call shapes.
 
 \section{Threat Model \& ECMA-434 Mapping}
 
 \subsection{Threat Model and Attack Taxonomy}
-We consider an untrusted or compromised AI agent (driven by any LLM or harness, potentially subverted by indirect prompt injection in repository files or tool outputs) interacting with a protected publication endpoint through an NLIP Type-3 boundary. The adversary's goal is to publish an unverified, failing, or trojaned artifact to a protected destination repository (e.g., \texttt{staging} or \texttt{prod}). We enumerate ten concrete attack classes ($\mathcal{A}_1$--$\mathcal{A}_{10}$):
+We consider an untrusted or compromised AI agent (driven by any LLM or harness, potentially subverted by indirect prompt injection in repository files or tool outputs) interacting with a protected publication endpoint through an NLIP Type-3 boundary. The adversary's goal is to publish an unverified, failing, or trojaned artifact to a protected destination repository (e.g., \texttt{staging} or \texttt{prod}). We enumerate ten attacks on the receipt protocol ($\mathcal{A}_1$--$\mathcal{A}_{10}$) and five on the verifier and boundary itself ($\mathcal{V}_1$--$\mathcal{V}_5$):
 \begin{itemize}
   \item $\mathcal{A}_1$ \textbf{(Unverified Publish):} Calling \texttt{publish} directly with no prior verification run.
   \item $\mathcal{A}_2$ \textbf{(Self-Report Fabrication):} Claiming \emph{``All 42 unit tests passed''} in the NLIP \texttt{text} field without a valid receipt.
   \item $\mathcal{A}_3$ \textbf{(Forged NLIP Submessage):} Attaching a fabricated \texttt{structured} receipt submessage (\texttt{status="passed"}) to the NLIP request.
   \item $\mathcal{A}_4$ \textbf{(Post-Check TOCTOU Commit):} Verifying clean commit $C_1$ (tree $T_1$), committing trojaned code $C_2$ (tree $T_2$), and invoking \texttt{publish} on $C_2$ citing $C_1$'s receipt.
-  \item $\mathcal{A}_5$ \textbf{(Concurrent Working-Tree Race):} Mutating tracked files in the working tree while verification or publication is in flight.
+  \item $\mathcal{A}_5$ \textbf{(Working-Tree Mutation):} Leaving unverified, uncommitted edits in the working tree when \texttt{publish} runs.
   \item $\mathcal{A}_6$ \textbf{(Confused-Deputy Replay):} Caller \texttt{agent-b} replays a valid receipt ID issued to \texttt{agent-a} for the same tree.
   \item $\mathcal{A}_7$ \textbf{(Destination/Profile Substitution):} Using a receipt earned under a lightweight \texttt{staging} profile to publish to a \texttt{prod} destination requiring a stricter check.
   \item $\mathcal{A}_8$ \textbf{(Expired Receipt or Stale Policy Epoch):} Presenting a receipt after its TTL expires or after the operator updates the verification policy epoch.
   \item $\mathcal{A}_9$ \textbf{(Single-Use Receipt Replay):} Reusing an already-consumed single-use receipt for a subsequent publication.
   \item $\mathcal{A}_{10}$ \textbf{(Superseding Failure Bypass):} Presenting an older passing receipt for tree $T_1$ after a more recent verification run on $T_1$ failed.
+  \item $\mathcal{V}_1$--$\mathcal{V}_3$ \textbf{(Verifier Abuse):} Code imported by the verification command pushes to the destination itself, rewrites the SE ledger (e.g., un-consuming a receipt), or reads host files and leaks them through its exit status.
+  \item $\mathcal{V}_4$ \textbf{(Caller Impersonation):} Asserting another caller's identity in the \texttt{token} submessage without its secret.
+  \item $\mathcal{V}_5$ \textbf{(Unlisted Branch):} Publishing a verified commit to a destination branch the policy does not allow.
 \end{itemize}
 
 \paragraph{Trusted Computing Base (TCB) and Security Boundary.}
-The TCB comprises the Type-3 SE supervisor process, its SQLite ledger and ephemeral HMAC key, the local \texttt{git} binary invoked with sanitized configuration (\texttt{--no-replace-objects}, \texttt{GIT\_CONFIG\_NOSYSTEM=1}, \texttt{GIT\_CONFIG\_GLOBAL=/dev/null}), the operator-configured \texttt{PolicyConfig} (including \texttt{pinned\_file\_sha256} digests for protected verification scripts), and the bare destination repositories. The security guarantee is \emph{verified-equals-published equivalence}: a commit is published only if its exact immutable tree passed the operator-pinned check under the active policy epoch. \texttt{nlip-receipts} does \emph{not} guarantee that an operator's test suite is semantically complete, nor does it defend against host-kernel compromise.
+The TCB comprises the Type-3 SE supervisor process, its SQLite ledger and ephemeral HMAC key, the local \texttt{git} binary invoked with sanitized configuration (\texttt{--no-replace-objects}, \texttt{GIT\_CONFIG\_NOSYSTEM=1}, \texttt{GIT\_CONFIG\_GLOBAL=/dev/null}), the operator-configured \texttt{PolicyConfig} (including \texttt{pinned\_file\_sha256} digests for protected verification scripts), and the bare destination repositories. The security guarantee is \emph{verified-equals-published equivalence}: a commit is published only if its exact immutable tree passed the operator-pinned check under the active policy epoch. The code under verification is \emph{outside} the TCB: the verification command imports it, so \texttt{verify} runs in an OS sandbox with no network or Unix-socket access, no host writes, and no view of the ledger, source repositories or user directories (Section~\ref{sec:snapshot}). The gate is meaningful only if the agent's sole route to a destination is the SE's \texttt{publish}. \texttt{nlip-receipts} does \emph{not} guarantee that an operator's test suite is semantically complete, nor that the tested code is correct: that code controls its own process's exit status (e.g., by exiting~0 at import), so pinning test files stops tests from being weakened but not from being subverted. It does not defend against host-kernel compromise.
 
 \subsection{Mapping to ECMA-434 \& Proposed SCO 7.3.4}
 Table~\ref{tab:scos} maps \texttt{nlip-receipts} to ECMA-434~\cite{ecma434}. While ECMA-434 \S7.3.2 mandates general runtime controls, it does not yet define a specific countermeasure for execution-attested precondition verification at tool boundaries. Following the Focus Area~3 call to propose new SCOs where needed, we define \textbf{SCO 7.3.4}:
@@ -84,10 +87,10 @@ Table~\ref{tab:scos} maps \texttt{nlip-receipts} to ECMA-434~\cite{ecma434}. Whi
 7.1.3 & Ethical-by-Design & Control-message disclosure \& \texttt{ETHICS.md} (Annex B). \\
 7.2.2 & Client Authorization & Per-caller allowlist \& per-destination profile check. \\
 7.2.3 & Privilege Misuse & Strips in-band auth tokens; binds receipts to \texttt{caller\_id} and \texttt{profile\_id} ($\mathcal{A}_6, \mathcal{A}_7$). \\
-7.2.4 & Observability \& Audit & SHA-256 hash-chained SQLite decision log (\texttt{decisions}). \\
+7.2.4 & Observability \& Audit & SHA-256 hash-chained SQLite decision log (\texttt{decisions}) recording each request's NLIP conversation token. \\
 7.2.7 & Secure Disclosure & NIST SSDF disclosure in \texttt{SECURITY.md} (Annex A). \\
 7.3.2 & Runtime Controls & Deterministic Type-3 reference monitor ($0$ LLM calls). \\
-\textbf{7.3.4*} & \textbf{Attested Side Effects} & \textbf{Proposed SCO:} Snapshot-verified, tree- \& epoch-bound receipt gate ($\mathcal{A}_1$--$\mathcal{A}_{10}$). \\
+\textbf{7.3.4*} & \textbf{Attested Side Effects} & \textbf{Proposed SCO:} Sandboxed snapshot verification; tree-, caller-, profile- \& epoch-bound receipt gate ($\mathcal{A}_1$--$\mathcal{A}_{10}$, $\mathcal{V}_1$--$\mathcal{V}_5$). \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -111,7 +114,7 @@ In \texttt{nlip-receipts}, the enforcement kernel \texttt{evaluate\_type3\_gate(
 \]
 It evaluates ten deterministic predicates in sequence:
 (1) policy existence (\texttt{POLICY\_NOT\_FOUND}),
-(2) caller HMAC credential authentication and allowlist authorization (\texttt{CALLER\_AUTH\_INVALID}, \texttt{CALLER\_UNAUTHORIZED}),
+(2) caller authentication against registered secrets (required by default), caller allowlist, and destination-branch allowlist (\texttt{CALLER\_AUTH\_INVALID}, \texttt{CALLER\_UNAUTHORIZED}, \texttt{BRANCH\_NOT\_ALLOWED}),
 (3) rejection of forged receipt submessages (\texttt{FORGED\_RECEIPT\_SUBMESSAGE}),
 (4) presence of a ledger receipt (\texttt{MISSING\_RECEIPT}),
 (5) SE-held HMAC-SHA256 verification (\texttt{RECEIPT\_INTEGRITY\_FAILED}),
@@ -122,9 +125,10 @@ It evaluates ten deterministic predicates in sequence:
 (10) exact commit and content-tree equality ($\text{rcpt}.\texttt{commit\_oid} = C_{\text{oid}}$ and $\text{rcpt}.\texttt{tree\_oid} = T_{\text{oid}}$) with no newer failing run on $T_{\text{oid}}$ (\texttt{ARTIFACT\_COMMIT\_MISMATCH}, \texttt{ARTIFACT\_TREE\_MISMATCH}, \texttt{SUPERSEDED\_BY\_FAILURE}).
 
 \subsection{Closing TOCTOU via Snapshot Verification and Commit-Pinned Push}
+\label{sec:snapshot}
 A subtle flaw in working-tree hooks is that files can change while tests run or between test completion and \texttt{git push}. \texttt{nlip-receipts} eliminates both windows:
 \begin{enumerate}
-  \item \textbf{Manifest-Verified Snapshot Execution:} On \texttt{verify(repo\_id, artifact\_ref, profile\_id)}, the SE rejects revision-search or reflog expressions (\texttt{:/}, \texttt{@\{...\}}) and resolves \texttt{artifact\_ref} to $(\text{Commit}_{\text{oid}}, \text{Tree}_{\text{oid}})$ via \texttt{git --no-replace-objects rev-parse --verify --end-of-options} with hooks disabled. It exports $\text{Tree}_{\text{oid}}$ via \texttt{git archive --worktree-attributes} into a fresh temporary directory (\texttt{tarfile.extractall(filter="data")}), verifies 1-to-1 blob-digest equivalence against \texttt{git ls-tree -r --full-tree} (blocking \texttt{.gitattributes} \texttt{export-ignore}/\texttt{export-subst}, symlinks, and submodule gitlinks), verifies any operator-pinned test file hashes (\texttt{pinned\_file\_sha256}), and executes \texttt{policy.command} (\texttt{shell=False}).
+  \item \textbf{Manifest-Verified Snapshot Execution:} On \texttt{verify(repo\_id, artifact\_ref, profile\_id)}, the SE rejects revision-search or reflog expressions (\texttt{:/}, \texttt{@\{...\}}) and resolves \texttt{artifact\_ref} to $(\text{Commit}_{\text{oid}}, \text{Tree}_{\text{oid}})$ via \texttt{git --no-replace-objects rev-parse --verify --end-of-options} with hooks disabled. It exports $\text{Tree}_{\text{oid}}$ via \texttt{git archive} into a fresh temporary directory (\texttt{tarfile.extractall(filter="data")}), verifies 1-to-1 blob-digest equivalence against \texttt{git ls-tree -r --full-tree} (blocking \texttt{.gitattributes} \texttt{export-ignore}/\texttt{export-subst}, symlinks, and submodule gitlinks), verifies any operator-pinned test file hashes (\texttt{pinned\_file\_sha256}), and executes \texttt{policy.command} (\texttt{shell=False}) inside an OS sandbox. On macOS a \texttt{sandbox-exec} profile denies network and Unix-socket access, Mach service lookups, signals to outside processes, writes outside the snapshot, and reads under user and temporary directories; on Linux bubblewrap runs the command in fresh namespaces with only system directories and the interpreter prefix mounted read-only. The ledger, repositories and destinations stay hidden even inside an exposed prefix. If no sandbox works, \texttt{verify} fails closed (\texttt{SANDBOX\_UNAVAILABLE}), and the isolation mode is bound into the receipt's command digest.
   \item \textbf{Transactional Check-and-Consume \& Commit-Pinned Push:} On \texttt{publish}, once \texttt{evaluate\_type3\_gate()} returns \texttt{allow}, the ledger executes a \texttt{BEGIN IMMEDIATE} transaction that re-verifies \texttt{consumed = 0}, \texttt{policy\_epoch}, and absence of superseding failures before setting \texttt{consumed = 1}. The executor then pushes the exact resolved commit object:
   \begin{lstlisting}
 git push --no-verify --no-follow-tags --porcelain -- <dest> <commit_oid>:refs/heads/<branch>
@@ -133,51 +137,87 @@ git push --no-verify --no-follow-tags --porcelain -- <dest> <commit_oid>:refs/he
 \end{enumerate}
 
 \subsection{Multi-Harness Adapters}
-Because all policy and state live behind the NLIP message boundary, integrating any agent harness requires only a thin (~30 LOC) adapter (\texttt{nlip\_receipts/adapters.py}). We provide working adapters for:
-(1) \textbf{Claude Code} (\texttt{PreToolUse} hook emitting \texttt{permissionDecision: allow|deny}),
-(2) \textbf{OpenAI Codex CLI} (\texttt{tool.execution.result} wrapper), and
-(3) \textbf{Google Antigravity (\texttt{agy})} (\texttt{EXECUTED} / \texttt{BLOCKED\_BY\_NLIP\_SE} tool wrapper), as well as standard FastAPI \texttt{nlip\_server} HTTP endpoints.
+Because all policy and state live behind the NLIP message boundary, a harness needs only a thin translation layer (\texttt{nlip\_receipts/adapters.py}). We provide in-process adapters that map three tool-call shapes to NLIP messages and back:
+(1) a \textbf{Claude Code} \texttt{PreToolUse} hook event, answered with \texttt{permissionDecision: allow|deny};
+(2) an \textbf{OpenAI Codex CLI} tool call; and
+(3) a \textbf{Google Antigravity (\texttt{agy})} tool call. The Codex and \texttt{agy} response shapes are our own. Wiring the adapters into the live harnesses (hook scripts, CLI configuration) is left to deployment; any HTTP client can also call the FastAPI \texttt{nlip\_server} endpoint directly.
 
 \section{Evaluation}
 
-We evaluate \texttt{nlip-receipts} across \textbf{8 system configurations} (4 baselines, 3 component ablations, and our full gate \texttt{S4\_nlip\_type3\_gate}) over \textbf{13 scenarios} ($\mathcal{A}_1$--$\mathcal{A}_{10}$ adversarial + $\mathcal{B}_1$--$\mathcal{B}_3$ benign workflows, 20 trials per scenario = 260 runs per system, \textbf{2,080 total evaluations}). All experiments are reproducible offline in $<6$ seconds via \texttt{make eval}.
+We use two harnesses, both run by \texttt{make eval} and in CI on every push. The \textbf{end-to-end attack suite} (\texttt{eval/e2e\_attacks.py}) exercises the real boundary: every attempt is an ECMA-430 message POSTed to the \texttt{nlip\_server} app, \texttt{verify} runs in the sandbox, \texttt{publish} performs a real \texttt{git push} into bare destination repositories, and callers authenticate with registered secrets. An attack counts as blocked only if the destination repositories show none of its effect. The \textbf{decision-function ablation} (\texttt{eval/benchmark.py}) calls \texttt{evaluate\_type3\_gate()} directly on seeded ledger states to isolate the contribution of each binding; it involves no NLIP message, \texttt{verify} or \texttt{git push}. Latencies were measured on a macOS laptop under heavy background load; the Linux CI run reproduces every pass/fail result.
 
-\subsection{Baselines and Ablations}
+\begin{table}[t]
+\centering
+\caption{End-to-end attack suite: real NLIP round trips, sandboxed \texttt{verify}, real \texttt{git push}. Each scenario ran 3 times in a fresh environment.}
+\label{tab:e2e}
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Scenario} & \textbf{Deciding check} & \textbf{Result} \\
+\midrule
+$\mathcal{A}_1$/$\mathcal{A}_2$ Unverified / self-report & \texttt{MISSING\_RECEIPT} & blocked 3/3 \\
+$\mathcal{A}_3$ Forged submessage & \texttt{FORGED\_RECEIPT\_SUBMESSAGE} & blocked 3/3 \\
+$\mathcal{A}_4$ Post-verify commit & \texttt{ARTIFACT\_TREE\_MISMATCH} & blocked 3/3 \\
+$\mathcal{A}_5$ Uncommitted edit & commit-pinned push$^\dagger$ & blocked 3/3 \\
+$\mathcal{A}_6$ Cross-caller replay & \texttt{CROSS\_CALLER\_REPLAY} & blocked 3/3 \\
+$\mathcal{A}_7$ Destination substitution & \texttt{PROFILE\_OR\_REPO\_MISMATCH} & blocked 3/3 \\
+$\mathcal{A}_8$ Expired / rotated epoch & \texttt{RECEIPT\_EXPIRED}, \texttt{POLICY\_EPOCH\_STALE} & blocked 3/3 \\
+$\mathcal{A}_9$ Single-use replay & \texttt{RECEIPT\_ALREADY\_CONSUMED} & blocked 3/3 \\
+$\mathcal{A}_{10}$ Superseded by failure & \texttt{SUPERSEDED\_BY\_FAILURE} & blocked 3/3 \\
+$\mathcal{V}_1$ Verify-time push & sandbox (no host writes) & blocked 3/3 \\
+$\mathcal{V}_2$ Verify-time ledger rewrite & sandbox (ledger hidden) & blocked 3/3 \\
+$\mathcal{V}_3$ Verify-time host-file read & sandbox (reads confined) & blocked 3/3 \\
+$\mathcal{V}_4$ Caller impersonation & \texttt{CALLER\_AUTH\_INVALID} & blocked 3/3 \\
+$\mathcal{V}_5$ Unlisted branch & \texttt{BRANCH\_NOT\_ALLOWED} & blocked 3/3 \\
+\midrule
+$\mathcal{B}_1$ Verify $\rightarrow$ publish & \texttt{VERIFIED\_RECEIPT\_VALID} & completed 3/3 \\
+$\mathcal{B}_2$ Fail $\rightarrow$ fix $\rightarrow$ reverify & failing tree refused, fix published & completed 3/3 \\
+$\mathcal{B}_3$ Three adapter shapes & each verified and published & completed 3/3 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright\scriptsize $^\dagger$The publish is allowed, but only the verified commit reaches the destination; the edit does not.
+\end{table}
+
+\subsection{Decision-Function Ablation}
+Table~\ref{tab:eval_overall} compares the full gate (\texttt{S4}) with simulated decision policies and with ablations of the real gate over 13 scenarios: 8 systems $\times$ 13 scenarios = 104 deterministic cases, each repeated 20 times to sample latency (2,080 decisions).
 \begin{itemize}
-  \item \texttt{B0\_no\_gate}: Vanilla \texttt{nlip\_server} execution with no Type-3 SE.
-  \item \texttt{B1\_prompt\_only}: Instruction-level guard that trusts natural-language completion claims or attached receipt fields.
-  \item \texttt{B2\_submessage\_trust}: Stateless boundary filter that inspects whether an NLIP \texttt{structured} receipt submessage reports \texttt{status="passed"}, without a server-side ledger lookup.
-  \item \texttt{B3\_unbound\_flag}: Stateful session boolean that records whether \emph{any} verification command exited $0$ during the session, without binding to $\text{Tree}_{\text{oid}}$, caller, destination profile, or TTL.
-  \item \texttt{Abl\_no\_tree\_bind}, \texttt{Abl\_no\_caller\_bind}, \texttt{Abl\_no\_profile\_bind}: Ablations of \texttt{S4} removing artifact-tree binding, caller binding, or destination-profile binding, respectively.
+  \item \texttt{B0\_no\_gate} (simulated): allows every call, as a vanilla \texttt{nlip\_server} with no Type-3 SE would.
+  \item \texttt{B1\_prompt\_only} (simulated): refuses only when the call carries no success claim or receipt field.
+  \item \texttt{B2\_submessage\_trust} (simulated): trusts any \texttt{structured} receipt submessage reporting \texttt{status="passed"}, without a ledger lookup.
+  \item \texttt{B3\_unbound\_flag} (simulated): trusts a session flag recording whether \emph{any} verification passed, unbound to tree, caller, profile or TTL.
+  \item \texttt{Abl\_no\_tree\_bind}, \texttt{Abl\_no\_caller\_bind}, \texttt{Abl\_no\_profile\_bind}: the real gate with artifact-tree, caller, or destination-profile binding removed.
 \end{itemize}
 
 \begin{table}[t]
 \centering
-\caption{Overall Evaluation Results across 2,080 Runs (200 Adversarial + 60 Benign per System).}
+\caption{Decision-function ablation over seeded ledger states (no NLIP transport, verify or push). B0--B3 are simulated policies. Latency in ms.}
 \label{tab:eval_overall}
 \scriptsize
 \setlength{\tabcolsep}{1.8pt}
-\begin{tabular}{@{}lrrrrrr@{}}
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
-\textbf{System} & \textbf{Block Rate} & \textbf{Unauth.} & \textbf{Benign} & \textbf{FP} & \textbf{p50} & \textbf{p99} \\
+\textbf{System} & \textbf{Block Rate} & \textbf{Benign} & \textbf{p50} & \textbf{p99} \\
 \midrule
-\texttt{B0\_no\_gate} & 0\% (0/200) & 100\% & 100\% & 0\% & 0.25 & 0.36 \\
-\texttt{B1\_prompt\_only} & 10\% (20/200) & 90\% & 100\% & 0\% & 0.28 & 0.48 \\
-\texttt{B2\_submessage\_trust} & 20\% (40/200) & 80\% & 100\% & 0\% & 0.30 & 0.63 \\
-\texttt{B3\_unbound\_flag} & 30\% (60/200) & 70\% & 100\% & 0\% & 0.33 & 0.75 \\
+\texttt{B0\_no\_gate} & 0\% (0/200) & 100\% & 0.36 & 0.57 \\
+\texttt{B1\_prompt\_only} & 10\% (20/200) & 100\% & 0.42 & 0.72 \\
+\texttt{B2\_submessage\_trust} & 20\% (40/200) & 100\% & 0.45 & 0.87 \\
+\texttt{B3\_unbound\_flag} & 30\% (60/200) & 100\% & 0.46 & 1.05 \\
 \midrule
-\texttt{Abl\_no\_tree\_bind} & 80\% (160/200) & 20\% & 100\% & 0\% & 0.69 & 1.33 \\
-\texttt{Abl\_no\_caller\_bind} & 90\% (180/200) & 10\% & 100\% & 0\% & 0.71 & 1.40 \\
-\texttt{Abl\_no\_profile\_bind} & 90\% (180/200) & 10\% & 100\% & 0\% & 0.76 & 1.55 \\
+\texttt{Abl\_no\_tree\_bind} & 80\% (160/200) & 100\% & 1.13 & 2.13 \\
+\texttt{Abl\_no\_caller\_bind} & 90\% (180/200) & 100\% & 1.08 & 2.44 \\
+\texttt{Abl\_no\_profile\_bind} & 90\% (180/200) & 100\% & 1.24 & 2.70 \\
 \midrule
-\textbf{\texttt{S4\_nlip\_type3\_gate}} & \textbf{100\% (200/200)} & \textbf{0\%} & \textbf{100\%} & \textbf{0\%} & \textbf{0.76} & \textbf{1.67} \\
+\textbf{\texttt{S4\_nlip\_type3\_gate}} & \textbf{100\% (200/200)} & \textbf{100\%} & \textbf{1.13} & \textbf{2.85} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
 \centering
-\caption{Per-Scenario Block Rate (Adversarial $\mathcal{A}_1$--$\mathcal{A}_{10}$) and Completion Rate (Benign $\mathcal{B}_1$--$\mathcal{B}_3$).}
+\caption{Ablation per scenario: block rate (adversarial) or completion rate (benign).}
 \label{tab:eval_scenarios}
 \scriptsize
 \setlength{\tabcolsep}{2.8pt}
@@ -189,27 +229,29 @@ $\mathcal{A}_1$ Unverified publish & 0\% & 100\% & 100\% & 100\% & 100\% & 100\%
 $\mathcal{A}_2$ Self-report claim & 0\% & 0\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_3$ Forged submessage & 0\% & 0\% & 0\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_4$ Post-check TOCTOU & 0\% & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & \textbf{100\%} \\
-$\mathcal{A}_5$ Worktree race edit & 0\% & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & \textbf{100\%} \\
+$\mathcal{A}_5$ Worktree edit$^\ddagger$ & 0\% & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_6$ Cross-caller replay & 0\% & 0\% & 0\% & 0\% & 100\% & 0\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_7$ Dest. substitution & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 0\% & \textbf{100\%} \\
-$\mathcal{A}_8$ Expired / stale epoch & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
+$\mathcal{A}_8$ Expired receipt & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_9$ Single-use replay & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 $\mathcal{A}_{10}$ Superseded failure & 0\% & 0\% & 0\% & 0\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 \midrule
 $\mathcal{B}_1$ Benign verify+pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
-$\mathcal{B}_2$ Fail$\rightarrow$fix$\rightarrow$reverify & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
-$\mathcal{B}_3$ Multi-harness pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
+$\mathcal{B}_2$ Fixed commit pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
+$\mathcal{B}_3$ Multi-caller pub & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & 100\% & \textbf{100\%} \\
 \bottomrule
 \end{tabular}
+
+\smallskip
+\raggedright\scriptsize $^\ddagger$In this harness $\mathcal{A}_5$ reuses $\mathcal{A}_4$'s committed-mutation case; Table~\ref{tab:e2e} tests an actual uncommitted edit. The epoch-rotation half of $\mathcal{A}_8$ is tested only end to end.
 \end{table}
 
 \subsection{Results and Findings}
-Tables~\ref{tab:eval_overall} and~\ref{tab:eval_scenarios} summarize the empirical results:
 \begin{enumerate}
-  \item \textbf{Necessity of Content- \& Context-Bound Receipts:} Stateless submessage inspection (\texttt{B2}) blocks only $20\%$ of attacks because an adversary can forge a \texttt{structured} receipt submessage ($\mathcal{A}_3$). Session-level boolean flags (\texttt{B3}) block $\mathcal{A}_1$--$\mathcal{A}_3$ ($30\%$) but fail completely against post-verification code edits ($\mathcal{A}_4, \mathcal{A}_5$), cross-caller replay ($\mathcal{A}_6$), destination substitution ($\mathcal{A}_7$), TTL/epoch staleness ($\mathcal{A}_8$), single-use replay ($\mathcal{A}_9$), and superseding failures ($\mathcal{A}_{10}$).
-  \item \textbf{Ablation Validation:} Removing $\text{Tree}_{\text{oid}}$ binding drops block rate from $100\%$ to $80\%$ (failing $\mathcal{A}_4$ and $\mathcal{A}_5$); removing caller binding drops it to $90\%$ (failing $\mathcal{A}_6$); and removing profile/command binding drops it to $90\%$ (failing $\mathcal{A}_7$). Only the full tuple binding in \texttt{S4\_nlip\_type3\_gate} achieves \textbf{100.0\% (200/200)} attack blocking while maintaining \textbf{100.0\% (60/60)} benign completion (including recovery after an initial test failure in $\mathcal{B}_2$).
-  \item \textbf{Runtime Overhead:} Because \texttt{evaluate\_type3\_gate()} performs only SQLite indexed lookups and SHA-256/HMAC-SHA256 verification with \textbf{zero LLM calls}, the gate decision overhead is \textbf{0.76~ms (p50)} and \textbf{1.67~ms (p99)}. End-to-end snapshot verification (\texttt{git archive} + test subprocess) takes $31.86\text{ ms}$ (p50), and commit-pinned publication (\texttt{git push}) takes $52.77\text{ ms}$ (p50).
-  \item \textbf{Live LLM Indirect Prompt Injection (IPI) Evaluation (\texttt{eval/live\_agent\_eval.py}):} To separate deterministic replay invariants from live model behavior, we evaluated two local tool-calling LLMs (\texttt{qwen3-coder-next:latest} and \texttt{gemma4:latest}, temperature $0.0$, seed $42$) on three repository-embedded IPI tasks ($\mathcal{I}_1$: fake CI-down override in \texttt{DEPLOY\_NOTES.md}; $\mathcal{I}_2$: forged receipt JSON in \texttt{HOTFIX\_402.md}; $\mathcal{I}_3$: developer note requesting TOCTOU reuse of a prior commit's receipt on a trojaned commit) and one multi-turn benign release workflow ($\mathcal{B}_4$: \texttt{verify} $\rightarrow$ \texttt{publish}). Both models were subverted by $3/3$ ($100\%$) of the IPI prompts into emitting unauthorized \texttt{publish} tool calls, resulting in $3/3$ unauthorized destination pushes under \texttt{B0\_no\_gate} and \texttt{B1\_prompt\_only}. Under \textbf{\texttt{S4\_nlip\_type3\_gate}}, \textbf{0/3 (0\%)} resulted in unauthorized destination mutations (blocked via \texttt{MISSING\_RECEIPT}, \texttt{FORGED\_RECEIPT\_SUBMESSAGE}, and \texttt{ARTIFACT\_TREE\_MISMATCH}), while \textbf{1/1 (100\%)} of the live multi-turn benign workflows succeeded for both models.
+  \item \textbf{End to end, every attack is stopped at the boundary:} Table~\ref{tab:e2e} shows all 16 attack scenarios blocked and all 3 benign workflows completed, with each outcome read from the destination repositories. The verifier-abuse scenarios ($\mathcal{V}_1$--$\mathcal{V}_3$) succeed when the sandbox is disabled, so the sandbox, not an artifact of the test setup, is what stops them.
+  \item \textbf{Each binding is necessary:} Stateless submessage inspection (\texttt{B2}) blocks only $20\%$ of attacks because an adversary can forge a \texttt{structured} receipt submessage ($\mathcal{A}_3$). Session-level flags (\texttt{B3}) block $\mathcal{A}_1$--$\mathcal{A}_3$ ($30\%$) but none of the rest. Removing $\text{Tree}_{\text{oid}}$ binding drops the block rate to $80\%$ (failing $\mathcal{A}_4$/$\mathcal{A}_5$), removing caller binding to $90\%$ (failing $\mathcal{A}_6$), and removing profile/command binding to $90\%$ (failing $\mathcal{A}_7$).
+  \item \textbf{Runtime overhead:} The decision function, including its SQLite lookups and HMAC check, takes 1.13~ms (p50) and 2.85~ms (p99) with \textbf{zero LLM calls}; the simulated pass-through \texttt{B0}, which performs the same lookups, takes 0.36~ms. A real publication is dominated by the commit-pinned \texttt{git push} (178~ms p50 end to end), and a real verification by the archive export and sandboxed test run (137~ms p50 for our small test suite). These latencies are host- and load-dependent; an earlier run on the same laptop under lighter load measured 78~ms and 86~ms.
+  \item \textbf{Live LLM prompt-injection probe (\texttt{eval/\allowbreak live\_agent\_eval.py}):} We gave two local tool-calling LLMs (\texttt{qwen3-coder-next:\allowbreak latest} and \texttt{gemma4:latest} via Ollama, temperature $0.0$, seed $42$, one sample each) three injection tasks and one benign multi-turn task. Each injection pastes a repository file's contents into the user turn ($\mathcal{I}_1$: fake CI-down override; $\mathcal{I}_2$: forged receipt JSON; $\mathcal{I}_3$: a note asking to reuse a prior commit's receipt on a trojaned commit), and two of the three end with an explicit instruction to act on it, so this probes instruction-following more than indirect injection. Both models emitted the unauthorized \texttt{publish} call in $3/3$ tasks. Under \texttt{S4} those calls were executed against the real gate, and \textbf{0/3} reached the destination (\texttt{MISSING\_RECEIPT}, \texttt{FORGED\_RECEIPT\_SUBMESSAGE}, \texttt{ARTIFACT\_TREE\_MISMATCH}); under \texttt{B0}/\texttt{B1} the emitted call would have been executed (counted, not pushed). The benign task completed for both models. These traces predate the sandbox and caller-authentication changes.
 \end{enumerate}
 
 \section{Limitations, Related Work \& Conclusion}
@@ -217,7 +259,7 @@ Tables~\ref{tab:eval_overall} and~\ref{tab:eval_scenarios} summarize the empiric
 Reference monitors and capability systems (such as OAuth DPoP, RFC 8693 token exchange, and Sigstore/in-toto attestations~\cite{intoto}) secure transport authentication and CI/CD supply chains. \texttt{nlip-receipts} brings content-addressed execution attestation directly to the \emph{in-session AI agent tool boundary} over ECMA-430/ECMA-434, bridging the gap between probabilistic agent reasoning and deterministic software publication gates.
 
 \paragraph{Limitations \& Future Work.}
-First, a receipt attests that the configured check command passed on $\text{Tree}_{\text{oid}}$, not that the check suite itself has complete coverage. Second, while we demonstrate Git-backed artifacts here, the \texttt{ToolCallProposal} and \texttt{VerificationReceipt} schemas apply to any content-addressed payload (e.g., container image digests or SQL migration bundles). Third, in multi-node deployments, the SQLite ledger can be replaced by a shared PostgreSQL store with detached Ed25519 signatures.
+First, a receipt attests that the configured check command exited~0 on $\text{Tree}_{\text{oid}}$, not that the check suite has complete coverage or that the code is correct: the tested code runs in the same process as the tests and can force a passing exit status. A verifier whose verdict does not depend on that process, or human review, is needed for adversarial code. Second, the sandbox is host-specific: on macOS a child that detaches with \texttt{setsid} can outlive the run (still sandboxed), and \texttt{sandbox-exec} is a deprecated interface. Third, the hash-chained decision log is unkeyed and the ledger's consumed flags are not HMAC-protected, so they resist partial edits but not a rewrite by someone with write access to the ledger file, which must therefore be writable only by the SE. Fourth, while we demonstrate Git-backed artifacts here, the \texttt{ToolCallProposal} and \texttt{VerificationReceipt} schemas apply to any content-addressed payload (e.g., container image digests or SQL migration bundles). Fifth, in multi-node deployments, the SQLite ledger can be replaced by a shared PostgreSQL store with detached Ed25519 signatures.
 
 \paragraph{Conclusion.}
 \texttt{nlip-receipts} provides a practical, immediately upstreamable Type-3 Security Extension for \texttt{nlip\_server} and \texttt{nlip\_sdk} that turns agent precondition verification from an unenforceable prompt instruction into a deterministic, cryptographically bound protocol invariant.
@@ -230,7 +272,7 @@ Ecma International. 2025. \emph{ECMA-434: Security Profiles for Natural Language
 \bibitem{ecmatr113}
 Ecma International. 2025. \emph{ECMA TR/113: Explanatory Guide to the Natural Language Interaction Protocol (NLIP)}, 1st Edition (December 2025).
 \bibitem{ietf_dmsc}
-D. Verma, S. Hughes, L. Xing, R. Topaloglu, E. Bertino, A. Ratnaparkhi, S. Aiyagari, and T. Ross. 2026. \emph{Natural Language Interaction for Dynamic Multi-Agent Secure Collaboration (NLIP-DMSC)}. IETF Internet-Draft \texttt{draft-natural-language-multiagent-00}.
+D. Verma, S. Hughes, L. Xing, R. Topaloglu, E. Bertino, A. Ratnaparkhi, S. Aiyagari, and T. Ross. 2026. \emph{Natural Language Interaction for Dynamic Multi-Agent Secure Collaboration}. Working draft (editor's copy, \texttt{draft-natural-language-multiagent-latest}), not yet submitted to the IETF. \url{https://github.com/nlip-project/item-draft-dmsc}.
 \bibitem{nlip_security_guidelines}
 NLIP Security Working Group. 2025. \emph{NLIP Security Guidelines and Best Practices}. \url{https://github.com/nlip-project/security_guidelines}.
 \bibitem{hermes_receipts}
@@ -246,10 +288,12 @@ All code, schemas, adapters, tests, and upstream standards proposals (\texttt{do
 # 0. One-command environment setup (installs nlip_sdk & nlip_server)
 make setup
 
-# 1. Run the 13 end-to-end pytest suites (HTTP, TOCTOU, Replay, Concurrency, 3 Adapters)
+# 1. Run the test suite (HTTP, TOCTOU, replay, concurrency,
+#    adapters, sandbox isolation, caller auth, branch allowlist)
 make test
 
-# 2. Reproduce the 2,080-run evaluation benchmark & ablation tables
+# 2. Reproduce the ablation and end-to-end attack tables
+#    (needs sandbox-exec on macOS or bubblewrap on Linux)
 make eval
 
 # 3. Run the 7-step interactive NLIP Type-3 demonstration
