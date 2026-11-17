@@ -132,7 +132,7 @@ def evaluate_type3_gate(
                     "[NLIP-SE Type-3] Denied publish: incoming NLIP submessage contained an "
                     "untrusted/forged receipt inconsistent with the SE ledger."
                 ),
-                sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+                sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
                 **base_kwargs,
             )
 
@@ -144,7 +144,7 @@ def evaluate_type3_gate(
                 "[NLIP-SE Type-3] Denied publish: no verification receipt provided. "
                 "Agent self-reports cannot authorize publication; invoke Type-3 'verify' first."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -154,7 +154,7 @@ def evaluate_type3_gate(
             action="deny",
             reason_code="RECEIPT_INTEGRITY_FAILED",
             message="[NLIP-SE Type-3] Denied publish: receipt HMAC integrity check failed.",
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -189,7 +189,7 @@ def evaluate_type3_gate(
                 f"profile='{receipt.profile_id}') does not match target destination='{proposal.destination}', "
                 f"profile='{policy.profile_id}'."
             ),
-            sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -202,7 +202,7 @@ def evaluate_type3_gate(
                 f"[NLIP-SE Type-3] Denied publish: receipt epoch ({receipt.policy_epoch}) "
                 f"predates current policy epoch ({policy.policy_epoch}). Re-run verification."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -211,7 +211,7 @@ def evaluate_type3_gate(
             action="deny",
             reason_code="RECEIPT_EXPIRED",
             message=f"[NLIP-SE Type-3] Denied publish: receipt '{receipt.receipt_id}' has expired.",
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -220,7 +220,7 @@ def evaluate_type3_gate(
             action="deny",
             reason_code="RECEIPT_ALREADY_CONSUMED",
             message=f"[NLIP-SE Type-3] Denied publish: single-use receipt '{receipt.receipt_id}' was already consumed.",
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -233,7 +233,7 @@ def evaluate_type3_gate(
                 f"[NLIP-SE Type-3] Denied publish: receipt '{receipt.receipt_id}' recorded "
                 f"status='{receipt.status}' (exit_code={receipt.exit_code})."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -246,7 +246,7 @@ def evaluate_type3_gate(
                 f"[NLIP-SE Type-3] Denied publish (TOCTOU blocked): candidate tree '{resolved_tree[:12]}' "
                 f"differs from verified receipt tree '{receipt.tree_oid[:12]}'."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -258,7 +258,7 @@ def evaluate_type3_gate(
                 f"[NLIP-SE Type-3] Denied publish: candidate commit '{resolved_commit[:12]}' differs from "
                 f"verified commit '{receipt.commit_oid[:12]}' (set allow_tree_equivalent_commits=True to allow)."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -276,7 +276,7 @@ def evaluate_type3_gate(
                 f"[NLIP-SE Type-3] Denied publish: passing receipt '{receipt.receipt_id}' was superseded "
                 f"by a subsequent failed run ('{latest_tree_receipt.receipt_id}') on the same tree."
             ),
-            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+            sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
             **base_kwargs,
         )
 
@@ -287,7 +287,7 @@ def evaluate_type3_gate(
             f"[NLIP-SE Type-3] Allowed publish of commit {resolved_commit[:12]} "
             f"(tree {resolved_tree[:12]}) to '{proposal.destination}' under receipt '{receipt.receipt_id}'."
         ),
-        sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.2.3", "ECMA-434:7.2.4", "ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+        sco_refs=["ECMA-434:7.2.2", "ECMA-434:7.2.3", "ECMA-434:7.2.4", "ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
         **base_kwargs,
     )
 
@@ -325,8 +325,21 @@ class Type3ReceiptExtension:
         return [*ledger_files, *self.repos.values(), *self.destinations.values()]
 
     def handle_proposal(
+        self,
+        proposal: ToolCallProposal,
+        *,
+        now: Optional[float] = None,
+        conversation_id: Optional[str] = None,
+    ) -> tuple[Type3Decision, Optional[VerificationReceipt]]:
+        decision, receipt = self._handle_proposal(proposal, now=now)
+        decision.conversation_id = conversation_id
+        self.ledger.record_decision(decision)
+        return decision, receipt
+
+    def _handle_proposal(
         self, proposal: ToolCallProposal, *, now: Optional[float] = None
     ) -> tuple[Type3Decision, Optional[VerificationReceipt]]:
+        """Decide and execute; the caller records the decision exactly once."""
         t0 = time.perf_counter()
         current_time = now if now is not None else time.time()
 
@@ -343,7 +356,6 @@ class Type3ReceiptExtension:
                 destination=proposal.destination,
                 latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
             )
-            self.ledger.record_decision(decision)
             return decision, None
 
         try:
@@ -360,7 +372,6 @@ class Type3ReceiptExtension:
                 destination=proposal.destination,
                 latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
             )
-            self.ledger.record_decision(decision)
             return decision, None
 
         policy = self.ledger.get_policy(proposal.repo_id, proposal.destination, proposal.profile_id)
@@ -384,7 +395,6 @@ class Type3ReceiptExtension:
                     tree_oid=artifact.tree_oid,
                     latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
                 )
-                self.ledger.record_decision(decision)
                 return decision, None
 
             if not caller_auth_ok:
@@ -402,7 +412,6 @@ class Type3ReceiptExtension:
                     policy_epoch=policy.policy_epoch,
                     latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
                 )
-                self.ledger.record_decision(decision)
                 return decision, None
 
             if policy.allowed_callers and proposal.caller_id not in policy.allowed_callers:
@@ -420,7 +429,6 @@ class Type3ReceiptExtension:
                     policy_epoch=policy.policy_epoch,
                     latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
                 )
-                self.ledger.record_decision(decision)
                 return decision, None
 
             try:
@@ -441,7 +449,7 @@ class Type3ReceiptExtension:
                         else "SNAPSHOT_INTEGRITY_FAILED"
                     ),
                     message=f"[NLIP-SE Type-3] Denied verify: snapshot integrity or pinned-test check failed: {exc}",
-                    sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+                    sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
                     operation="verify",
                     repo_id=proposal.repo_id,
                     caller_id=proposal.caller_id,
@@ -451,7 +459,6 @@ class Type3ReceiptExtension:
                     policy_epoch=policy.policy_epoch,
                     latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
                 )
-                self.ledger.record_decision(decision)
                 return decision, None
             status = "passed" if exit_code == 0 else "failed"
             receipt = self.ledger.issue_receipt(
@@ -480,7 +487,7 @@ class Type3ReceiptExtension:
                     f"[NLIP-SE Type-3] Verification {status} (exit={exit_code}) on isolated snapshot "
                     f"of tree {artifact.tree_oid[:12]}; receipt='{receipt.receipt_id}'."
                 ),
-                sco_refs=["ECMA-434:7.2.4", "ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+                sco_refs=["ECMA-434:7.2.4", "ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
                 operation="verify",
                 repo_id=proposal.repo_id,
                 caller_id=proposal.caller_id,
@@ -491,7 +498,6 @@ class Type3ReceiptExtension:
                 policy_epoch=policy.policy_epoch,
                 latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
             )
-            self.ledger.record_decision(decision)
             return decision, receipt
 
         # Operation == "publish"
@@ -544,7 +550,7 @@ class Type3ReceiptExtension:
                         action="deny",
                         reason_code="RECEIPT_ALREADY_CONSUMED",
                         message=f"[NLIP-SE Type-3] Denied publish: receipt '{stored_receipt.receipt_id}' already consumed.",
-                        sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+                        sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4-proposed"],
                         operation="publish",
                         repo_id=proposal.repo_id,
                         caller_id=proposal.caller_id,
@@ -580,12 +586,11 @@ class Type3ReceiptExtension:
                         )
 
         decision.latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-        self.ledger.record_decision(decision)
         return decision, stored_receipt
 
     def handle_nlip_message(self, msg: NLIP_Message, *, now: Optional[float] = None) -> NLIP_Message:
         """Process an ECMA-430 NLIP_Message at the Type-3 control point and return an NLIP_Message."""
         conv_token = msg.extract_conversation_token()
         proposal, _sanitized = unpack_tool_call_message(msg)
-        decision, receipt = self.handle_proposal(proposal, now=now)
+        decision, receipt = self.handle_proposal(proposal, now=now, conversation_id=conv_token)
         return pack_decision_message(decision, receipt=receipt, conversation_id=conv_token)

@@ -398,3 +398,59 @@ def test_code_under_test_cannot_force_passing_exit(tmp_path):
     _commit(e["work"], {"app.py": "import os\nos._exit(0)\ndef add(a, b):\n    return -999\n"})
     dec, _ = e["ext"].handle_proposal(_prop("verify", "mallory"))
     assert dec.reason_code != "VERIFICATION_PASSED"
+
+
+def test_revoke_disable_and_clear_repo_fail_closed(tmp_path):
+    """ETHICS.md off-switches: revoked policies and purged repos deny verify and publish."""
+    e = _env(tmp_path)
+    ext, ledger = e["ext"], e["ledger"]
+    _, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert ledger.revoke_policy("svc", "prod", "p") is True
+    dec, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.reason_code == "POLICY_NOT_FOUND"
+    assert _prod_main(e["prod"]) is None
+
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                      allowed_callers=list(SECRETS))
+    assert ledger.disable_destination("prod") == 1
+    assert ext.handle_proposal(_prop("verify", "alice"))[0].reason_code == "POLICY_NOT_FOUND"
+
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                      allowed_callers=list(SECRETS))
+    _, rec2 = ext.handle_proposal(_prop("verify", "alice"))
+    assert ledger.clear_repo("svc") == (1, 2)
+    assert ledger.get_receipt(rec2.receipt_id) is None
+
+
+def test_policy_row_deleted_outside_the_api_does_not_revive_old_receipts(tmp_path):
+    import sqlite3
+
+    e = _env(tmp_path)
+    ext, ledger = e["ext"], e["ledger"]
+    _, rec = ext.handle_proposal(_prop("verify", "alice"))
+    with sqlite3.connect(e["db"]) as conn:
+        conn.execute("DELETE FROM policies")
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                      allowed_callers=list(SECRETS))
+    dec, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.reason_code == "POLICY_EPOCH_STALE"
+    assert _prod_main(e["prod"]) is None
+
+
+def test_recreating_a_revoked_policy_does_not_revive_old_receipts(tmp_path):
+    e = _env(tmp_path)
+    ext, ledger = e["ext"], e["ledger"]
+    _, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert ledger.revoke_policy("svc", "prod", "p") is True
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                      allowed_callers=list(SECRETS))
+    dec, _ = ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))
+    assert dec.reason_code == "POLICY_EPOCH_STALE"
+    assert _prod_main(e["prod"]) is None
+
+
+def test_decision_log_records_nlip_conversation_id(tmp_path):
+    e = _env(tmp_path)
+    msg = pack_tool_call_message(_prop("verify", "alice"), auth_token="alice:alice-secret", conversation_id="conv-42")
+    e["ext"].handle_nlip_message(msg)
+    assert e["ledger"].list_decisions(limit=1)[0]["conversation_id"] == "conv-42"

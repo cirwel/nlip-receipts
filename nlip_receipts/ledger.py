@@ -37,6 +37,7 @@ _DDL = (
         single_use INTEGER NOT NULL,
         allow_tree_equiv INTEGER NOT NULL DEFAULT 0,
         allowed_branches_json TEXT NOT NULL DEFAULT '["main"]',
+        revoked INTEGER NOT NULL DEFAULT 0,
         policy_epoch INTEGER NOT NULL,
         updated_at REAL NOT NULL,
         PRIMARY KEY (repo_id, destination, profile_id)
@@ -77,6 +78,7 @@ _DDL = (
         commit_oid TEXT NOT NULL,
         tree_oid TEXT NOT NULL,
         receipt_id TEXT,
+        conversation_id TEXT,
         sco_refs_json TEXT NOT NULL,
         latency_ms REAL NOT NULL,
         prev_hash TEXT NOT NULL,
@@ -131,7 +133,12 @@ class ReceiptLedger:
             try:
                 for stmt in _DDL:
                     conn.execute(stmt)
+                dcols = {r["name"] for r in conn.execute("PRAGMA table_info(decisions)")}
+                if "conversation_id" not in dcols:
+                    conn.execute("ALTER TABLE decisions ADD COLUMN conversation_id TEXT")
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
+                if "revoked" not in cols:
+                    conn.execute("ALTER TABLE policies ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
                 if "allowed_branches_json" not in cols:
                     conn.execute(
                         "ALTER TABLE policies ADD COLUMN allowed_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'"
@@ -233,12 +240,21 @@ class ReceiptLedger:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Never reuse an epoch that a stored receipt carries, even if the policy row was
+                # removed outside the API: a re-created policy must not revive old receipts.
+                floor = int(
+                    conn.execute(
+                        """SELECT COALESCE(MAX(policy_epoch), 0) AS e FROM receipts
+                           WHERE repo_id = ? AND destination = ? AND profile_id = ?""",
+                        (repo_id, destination, profile_id),
+                    ).fetchone()["e"]
+                )
                 row = conn.execute(
                     """INSERT INTO policies (
                         repo_id, destination, profile_id, command_json, allowed_callers_json,
                         pinned_files_json, ttl_seconds, single_use, allow_tree_equiv,
                         allowed_branches_json, policy_epoch, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? + 1, ?)
                     ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
                         command_json = excluded.command_json,
                         allowed_callers_json = excluded.allowed_callers_json,
@@ -247,7 +263,8 @@ class ReceiptLedger:
                         single_use = excluded.single_use,
                         allow_tree_equiv = excluded.allow_tree_equiv,
                         allowed_branches_json = excluded.allowed_branches_json,
-                        policy_epoch = policies.policy_epoch + 1,
+                        revoked = 0,
+                        policy_epoch = MAX(policies.policy_epoch, ?) + 1,
                         updated_at = excluded.updated_at
                     RETURNING policy_epoch
                     """,
@@ -262,7 +279,9 @@ class ReceiptLedger:
                         1 if single_use else 0,
                         1 if allow_tree_equivalent_commits else 0,
                         json.dumps(branches),
+                        floor,
                         now,
+                        floor,
                     ),
                 ).fetchone()
                 next_epoch = int(row["policy_epoch"])
@@ -287,7 +306,7 @@ class ReceiptLedger:
     def get_policy(self, repo_id: str, destination: str, profile_id: str = "default") -> Optional[PolicyConfig]:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT * FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                "SELECT * FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0",
                 (repo_id, destination, profile_id),
             ).fetchone()
         if not row:
@@ -305,6 +324,42 @@ class ReceiptLedger:
             allowed_branches=json.loads(row["allowed_branches_json"] or '["main"]'),
             policy_epoch=int(row["policy_epoch"]),
         )
+
+    # Revocation keeps the policy row (marked revoked) and advances its epoch, so re-creating the
+    # policy later continues from a higher epoch and receipts issued before revocation stay dead.
+    def revoke_policy(self, repo_id: str, destination: str, profile_id: str = "default") -> bool:
+        """Revoke a policy. Later `verify`/`publish` calls fail closed with POLICY_NOT_FOUND, and
+        receipts issued under it can never be spent, even if the policy is re-created.
+        Returns True if an active policy was revoked."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            cur = conn.execute(
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0""",
+                (repo_id, destination, profile_id),
+            )
+            return cur.rowcount > 0
+
+    def disable_destination(self, destination: str) -> int:
+        """Revoke every active policy that publishes to `destination`. Returns the number revoked."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            return conn.execute(
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE destination = ? AND revoked = 0""",
+                (destination,),
+            ).rowcount
+
+    def clear_repo(self, repo_id: str) -> tuple[int, int]:
+        """Revoke every policy for `repo_id` and delete its receipts. Policy rows are kept (revoked)
+        so their epochs keep rising if re-created; the hash-chained decision log is kept, since
+        deleting rows from it would break the chain. Returns (policies_revoked, receipts_removed)."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            pol = conn.execute(
+                """UPDATE policies SET revoked = 1, policy_epoch = policy_epoch + 1
+                   WHERE repo_id = ? AND revoked = 0""",
+                (repo_id,),
+            ).rowcount
+            rec = conn.execute("DELETE FROM receipts WHERE repo_id = ?", (repo_id,)).rowcount
+            return pol, rec
 
     # ── Receipt Issuance & Lookup ───────────────────────────────────────────
     def issue_receipt(
@@ -468,7 +523,7 @@ class ReceiptLedger:
                     conn.execute("ROLLBACK")
                     return False
                 pol_row = conn.execute(
-                    "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
+                    "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ? AND revoked = 0",
                     (row["repo_id"], row["destination"], row["profile_id"]),
                 ).fetchone()
                 if not pol_row or int(row["policy_epoch"]) != int(pol_row["policy_epoch"]):
@@ -521,6 +576,7 @@ class ReceiptLedger:
                     decision.commit_oid,
                     decision.tree_oid,
                     decision.receipt_id or "",
+                    decision.conversation_id or "",
                     sco_json,
                     f"{decision.latency_ms:.3f}",
                 ]
@@ -530,8 +586,8 @@ class ReceiptLedger:
                     """INSERT INTO decisions (
                         decision_id, recorded_at, action, reason_code, operation,
                         repo_id, caller_id, destination, commit_oid, tree_oid,
-                        receipt_id, sco_refs_json, latency_ms, prev_hash, entry_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        receipt_id, conversation_id, sco_refs_json, latency_ms, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         decision.decision_id,
                         now,
@@ -544,6 +600,7 @@ class ReceiptLedger:
                         decision.commit_oid,
                         decision.tree_oid,
                         decision.receipt_id,
+                        decision.conversation_id,
                         sco_json,
                         decision.latency_ms,
                         prev_hash,

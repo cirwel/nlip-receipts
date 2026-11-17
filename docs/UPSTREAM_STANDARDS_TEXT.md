@@ -2,8 +2,8 @@
 
 This document provides drop-in normative text and reference interfaces from `nlip-receipts` ready for incorporation into:
 1. **ECMA-434** (*Security Profiles for Natural Language Interaction Protocol (NLIP)*) — Proposed Clause **7.3.4 (Execution-Attested Side-Effect Gating)**
-2. **IETF Draft `draft-natural-language-multiagent`** ([`nlip-project/item-draft-dmsc`](https://github.com/nlip-project/item-draft-dmsc)) — Completing the `# Security Considerations` (`TODO Security`) section
-3. **`nlip-project/nlip_server`** — Pluggable Security Extension (`NLIP_SecurityExtension`) interface
+2. **NLIP-DMSC working draft `draft-natural-language-multiagent`** ([`nlip-project/item-draft-dmsc`](https://github.com/nlip-project/item-draft-dmsc); an editor's copy, not yet submitted to the IETF datatracker) — Completing the `# Security Considerations` (`TODO Security`) section
+3. **`nlip-project/nlip_server`** — A proposed pluggable Security Extension hook. No such interface exists upstream yet; `nlip_receipts/server.py` integrates by supplying its own `NLIP_Session`/`SafeApplication`, which wraps the whole application rather than sitting in front of an existing one.
 
 ---
 
@@ -35,7 +35,7 @@ Specifically:
 
 ---
 
-## 2. Proposed `# Security Considerations` Section for IETF Draft `draft-natural-language-multiagent` (`NLIP-DMSC`)
+## 2. Proposed `# Security Considerations` Section for the NLIP-DMSC Working Draft (`draft-natural-language-multiagent`)
 
 In [`nlip-project/item-draft-dmsc/draft-natural-language-multiagent.md`](https://github.com/nlip-project/item-draft-dmsc), Section `# Security Considerations` is currently marked `TODO Security`. The following text directly addresses the security implications of the draft's `ntohs`/`htons` generative-AI translation model:
 
@@ -83,4 +83,4 @@ repositories, or enterprise directories as described in ECMA TR/113):
 
 ## 3. Upstream Pluggable Hook Interface for `nlip-project/nlip_server`
 
-[`nlip_receipts/server.py`](../nlip_receipts/server.py) demonstrates how `nlip_server.NLIP_Session` can host a Type-3 Security Extension without breaking backward compatibility with existing `NLIP_Application` subclasses, while also implementing the ECMA-430 Clause 6.3 / ECMA TR/113 Clause 10 `control`-message policy disclosure handshake.
+[`nlip_receipts/server.py`](../nlip_receipts/server.py) shows a Type-3 Security Extension hosted by a custom `nlip_server.NLIP_Session`. Because upstream has no pre/post-tool hook, it replaces the application's session rather than wrapping an existing `NLIP_Application`; a hook upstream would let it sit in front of existing applications. It also implements the ECMA-430 Clause 6.3 / ECMA TR/113 Clause 10 `control`-message policy disclosure handshake.

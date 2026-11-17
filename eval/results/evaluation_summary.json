@@ -12,9 +12,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.247,
-        "p95": 0.342,
-        "p99": 0.373
+        "p50": 0.415,
+        "p95": 0.528,
+        "p99": 0.607
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -24,7 +24,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.15
+          "median_latency_ms": 0.331
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -32,7 +32,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.147
+          "median_latency_ms": 0.279
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -40,7 +40,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.217
+          "median_latency_ms": 0.345
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -48,7 +48,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.231
+          "median_latency_ms": 0.395
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -56,7 +56,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.229
+          "median_latency_ms": 0.439
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -64,7 +64,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.284
+          "median_latency_ms": 0.494
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -72,7 +72,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.233
+          "median_latency_ms": 0.351
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -80,7 +80,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.304
+          "median_latency_ms": 0.433
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -88,7 +88,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.305
+          "median_latency_ms": 0.421
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -96,7 +96,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.326
+          "median_latency_ms": 0.481
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -104,23 +104,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.341
+          "median_latency_ms": 0.486
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.246
+          "median_latency_ms": 0.391
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.249
+          "median_latency_ms": 0.397
         }
       }
     },
@@ -134,9 +134,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.275,
-        "p95": 0.468,
-        "p99": 0.481
+        "p50": 0.433,
+        "p95": 0.65,
+        "p99": 0.718
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -146,7 +146,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.161
+          "median_latency_ms": 0.285
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -154,7 +154,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.162
+          "median_latency_ms": 0.281
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -162,7 +162,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.234
+          "median_latency_ms": 0.356
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -170,7 +170,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.24
+          "median_latency_ms": 0.369
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -178,7 +178,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.24
+          "median_latency_ms": 0.382
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -186,7 +186,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.41
+          "median_latency_ms": 0.559
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -194,7 +194,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.269
+          "median_latency_ms": 0.435
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -202,7 +202,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.429
+          "median_latency_ms": 0.601
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -210,7 +210,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.447
+          "median_latency_ms": 0.566
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -218,7 +218,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.45
+          "median_latency_ms": 0.602
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -226,23 +226,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.468
+          "median_latency_ms": 0.604
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.269
+          "median_latency_ms": 0.411
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.28
+          "median_latency_ms": 0.42
         }
       }
     },
@@ -256,9 +256,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.3,
-        "p95": 0.605,
-        "p99": 0.614
+        "p50": 0.442,
+        "p95": 0.795,
+        "p99": 0.874
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -268,7 +268,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.169
+          "median_latency_ms": 0.303
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -276,7 +276,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.169
+          "median_latency_ms": 0.315
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -284,7 +284,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.241
+          "median_latency_ms": 0.391
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -292,7 +292,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.253
+          "median_latency_ms": 0.399
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -300,7 +300,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.255
+          "median_latency_ms": 0.395
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -308,7 +308,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.528
+          "median_latency_ms": 0.739
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -316,7 +316,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.287
+          "median_latency_ms": 0.416
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -324,7 +324,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.562
+          "median_latency_ms": 0.706
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -332,7 +332,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.579
+          "median_latency_ms": 0.718
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -340,7 +340,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.572
+          "median_latency_ms": 0.779
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -348,23 +348,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.605
+          "median_latency_ms": 0.758
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.299
+          "median_latency_ms": 0.425
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.31
+          "median_latency_ms": 0.436
         }
       }
     },
@@ -378,9 +378,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.322,
-        "p95": 0.728,
-        "p99": 0.737
+        "p50": 0.496,
+        "p95": 0.955,
+        "p99": 1.027
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -390,7 +390,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.183
+          "median_latency_ms": 0.297
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -398,7 +398,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.184
+          "median_latency_ms": 0.293
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -406,7 +406,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.252
+          "median_latency_ms": 0.381
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -414,7 +414,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.268
+          "median_latency_ms": 0.398
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -422,7 +422,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.268
+          "median_latency_ms": 0.4
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -430,7 +430,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.682
+          "median_latency_ms": 0.818
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -438,7 +438,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.313
+          "median_latency_ms": 0.457
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -446,7 +446,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.69
+          "median_latency_ms": 0.844
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -454,7 +454,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.685
+          "median_latency_ms": 0.84
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -462,7 +462,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.705
+          "median_latency_ms": 0.939
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -470,23 +470,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.726
+          "median_latency_ms": 0.909
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.315
+          "median_latency_ms": 0.469
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.336
+          "median_latency_ms": 0.493
         }
       }
     },
@@ -500,9 +500,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.831,
-        "p95": 1.478,
-        "p99": 1.496
+        "p50": 0.555,
+        "p95": 1.2,
+        "p99": 1.27
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -512,7 +512,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.211
+          "median_latency_ms": 0.377
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -520,7 +520,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.209
+          "median_latency_ms": 0.347
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -528,7 +528,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.278
+          "median_latency_ms": 0.42
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -536,7 +536,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.901
+          "median_latency_ms": 0.461
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -544,7 +544,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.871
+          "median_latency_ms": 0.486
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -552,7 +552,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.831
+          "median_latency_ms": 1.027
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -560,7 +560,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.359
+          "median_latency_ms": 0.547
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -568,7 +568,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.855
+          "median_latency_ms": 1.074
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -576,7 +576,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.835
+          "median_latency_ms": 1.067
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -584,7 +584,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.859
+          "median_latency_ms": 1.084
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -592,23 +592,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.487
+          "median_latency_ms": 1.102
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.726
+          "median_latency_ms": 0.535
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.829
+          "median_latency_ms": 0.557
         }
       }
     },
@@ -622,9 +622,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.73,
-        "p95": 1.682,
-        "p99": 1.705
+        "p50": 0.572,
+        "p95": 1.342,
+        "p99": 1.43
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -634,7 +634,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.257
+          "median_latency_ms": 0.358
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -642,7 +642,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.253
+          "median_latency_ms": 0.378
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -650,7 +650,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.283
+          "median_latency_ms": 0.456
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -658,7 +658,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.306
+          "median_latency_ms": 0.462
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -666,7 +666,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.309
+          "median_latency_ms": 0.483
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -674,7 +674,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 1.557
+          "median_latency_ms": 1.126
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -682,7 +682,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.377
+          "median_latency_ms": 0.531
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -690,7 +690,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.945
+          "median_latency_ms": 1.244
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -698,7 +698,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.966
+          "median_latency_ms": 1.228
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -706,7 +706,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.979
+          "median_latency_ms": 1.279
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -714,23 +714,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.691
+          "median_latency_ms": 1.309
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.728
+          "median_latency_ms": 0.554
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.759
+          "median_latency_ms": 0.583
         }
       }
     },
@@ -744,9 +744,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.803,
-        "p95": 1.842,
-        "p99": 1.907
+        "p50": 0.585,
+        "p95": 1.396,
+        "p99": 1.459
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -756,7 +756,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.231
+          "median_latency_ms": 0.367
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -764,7 +764,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.228
+          "median_latency_ms": 0.37
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -772,7 +772,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.299
+          "median_latency_ms": 0.443
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -780,7 +780,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.318
+          "median_latency_ms": 0.492
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -788,7 +788,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.32
+          "median_latency_ms": 0.464
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -796,7 +796,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.106
+          "median_latency_ms": 1.303
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -804,7 +804,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 1.172
+          "median_latency_ms": 0.591
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -812,7 +812,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.091
+          "median_latency_ms": 1.367
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -820,7 +820,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.11
+          "median_latency_ms": 1.294
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -828,7 +828,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.14
+          "median_latency_ms": 1.355
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -836,23 +836,23 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.879
+          "median_latency_ms": 1.358
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.779
+          "median_latency_ms": 0.545
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.796
+          "median_latency_ms": 0.581
         }
       }
     },
@@ -866,9 +866,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.799,
-        "p95": 2.028,
-        "p99": 2.056
+        "p50": 0.626,
+        "p95": 1.656,
+        "p99": 1.745
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -878,7 +878,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.241
+          "median_latency_ms": 0.371
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -886,7 +886,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.247
+          "median_latency_ms": 0.387
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -894,7 +894,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.316
+          "median_latency_ms": 0.45
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -902,7 +902,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.335
+          "median_latency_ms": 0.457
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -910,7 +910,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.327
+          "median_latency_ms": 0.467
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -918,7 +918,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.22
+          "median_latency_ms": 1.453
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -926,7 +926,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.43
+          "median_latency_ms": 0.591
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -934,7 +934,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.245
+          "median_latency_ms": 1.448
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -942,7 +942,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.236
+          "median_latency_ms": 1.463
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -950,7 +950,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.223
+          "median_latency_ms": 1.653
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -958,35 +958,35 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 2.033
+          "median_latency_ms": 1.594
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
-          "description": "Verify buggy commit (blocked) -> fix in C2 -> reverify C2 -> publish C2",
+          "description": "Publish a fixed commit with its own passing receipt (the failing step is tested end to end)",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.799
+          "median_latency_ms": 0.586
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
-          "description": "Sequential verified publications across Claude, Codex, and AGY adapters",
+          "description": "Publish by a second caller (agent-codex) with its own receipt",
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.821
+          "median_latency_ms": 0.676
         }
       }
     }
   },
   "e2e_verify_and_publish_latency_ms": {
     "snapshot_verify_ms": {
-      "p50": 36.026,
-      "p95": 36.379
+      "p50": 81.107,
+      "p95": 90.943
     },
     "commit_pinned_publish_ms": {
-      "p50": 50.911,
-      "p95": 55.786
+      "p50": 69.679,
+      "p95": 74.554
     }
   }
 }

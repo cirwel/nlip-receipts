@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 .DS_Store
 *.egg-info/
+.iso-*/
+.nlip-e2e-*/
