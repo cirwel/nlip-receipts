@@ -101,10 +101,6 @@ class ReceiptLedger:
         self._hmac_key = hmac_key or secrets.token_bytes(32)
         self.strict_caller_auth = strict_caller_auth
         self._init_db()
-        try:
-            os.chmod(self.db_path, 0o600)
-        except OSError:
-            pass
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5.0)
@@ -112,21 +108,31 @@ class ReceiptLedger:
         return conn
 
     def _init_db(self) -> None:
-        with self._lock, closing(self._connect()) as conn, conn:
-            for stmt in _DDL:
-                conn.execute(stmt)
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
-            if "allowed_branches_json" not in cols:
+        if not self.db_path.exists():
+            # Create the file 0600 before SQLite opens it, rather than chmod-ing afterwards.
+            os.close(os.open(self.db_path, os.O_CREAT | os.O_WRONLY, 0o600))
+        with self._lock, closing(self._connect()) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")  # serialize concurrent first-open migrations
+            try:
+                for stmt in _DDL:
+                    conn.execute(stmt)
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(policies)")}
+                if "allowed_branches_json" not in cols:
+                    conn.execute(
+                        "ALTER TABLE policies ADD COLUMN allowed_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'"
+                    )
+                    # Ledgers from before sandboxed verify: retire every receipt they hold by
+                    # advancing each policy epoch, so nothing verified unsandboxed can be spent.
+                    conn.execute("UPDATE policies SET policy_epoch = policy_epoch + 1")
                 conn.execute(
-                    "ALTER TABLE policies ADD COLUMN allowed_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'"
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('issuer_id', ?)",
+                    (f"nlip-se-{uuid.uuid4().hex[:12]}",),
                 )
-                # Ledgers from before sandboxed verify: retire every receipt they hold by
-                # advancing each policy epoch, so nothing verified unsandboxed can be spent.
-                conn.execute("UPDATE policies SET policy_epoch = policy_epoch + 1")
-            conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('issuer_id', ?)",
-                (f"nlip-se-{uuid.uuid4().hex[:12]}",),
-            )
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     def issuer_id(self) -> str:
         with self._lock, closing(self._connect()) as conn:

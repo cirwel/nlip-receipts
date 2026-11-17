@@ -223,6 +223,7 @@ def _evaluate_publish_under_system(
             receipt_hmac_valid=hmac_ok,
             policy=policy,
             now=now,
+            caller_authenticated=ext.ledger.verify_caller_secret(proposal.caller_id, proposal.caller_secret),
         )
         allowed = dec.action == "allow"
         if allowed and stored_rec is not None and policy is not None and policy.single_use:

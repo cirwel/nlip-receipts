@@ -24,6 +24,24 @@ from nlip_receipts.schemas import unpack_tool_call_message
 SECRETS = {"alice": "alice-secret", "mallory": "mallory-secret"}
 
 
+@pytest.fixture()
+def host_dir():
+    """A scratch directory under the current working directory instead of /tmp.
+
+    The Linux sandbox mounts an empty tmpfs over /tmp, so fixtures under pytest's tmp_path would be
+    invisible to sandboxed code whatever the sandbox's other rules were. Placing them under the
+    checkout makes the isolation tests fail if the sandbox ever exposes or writes the host tree.
+    """
+    import shutil
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(dir=Path.cwd(), prefix=".iso-"))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def _env(tmp: Path, *, pin: bool = False) -> dict:
     work = tmp / "work"
     work.mkdir()
@@ -79,9 +97,9 @@ def _prod_main(prod: Path):
         return None
 
 
-def test_verify_code_cannot_push_to_destination(tmp_path):
+def test_verify_code_cannot_push_to_destination(host_dir):
     """Code imported by the verify command must not be able to publish by pushing directly."""
-    e = _env(tmp_path, pin=True)
+    e = _env(host_dir, pin=True)
     _commit(
         e["work"],
         {
@@ -101,9 +119,9 @@ def test_verify_code_cannot_push_to_destination(tmp_path):
     assert _prod_main(e["prod"]) is None
 
 
-def test_verify_code_cannot_rewrite_ledger(tmp_path):
+def test_verify_code_cannot_rewrite_ledger(host_dir):
     """Code run by verify must not be able to un-consume a single-use receipt in the ledger."""
-    e = _env(tmp_path)
+    e = _env(host_dir)
     ext = e["ext"]
     _, rec = ext.handle_proposal(_prop("verify", "alice"))
     assert ext.handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id))[0].action == "allow"
@@ -231,7 +249,53 @@ def test_legacy_ledger_migration_retires_existing_receipts(tmp_path):
     assert _prod_main(e["prod"]) is None
 
 
-def test_unprovisioned_caller_cannot_impersonate(tmp_path):
+def test_verify_code_cannot_read_host_files(host_dir):
+    """Files outside the snapshot and interpreter prefix (ledger, keys, other repos) are unreadable,
+    so the verify exit code cannot be used to leak them a byte at a time."""
+    e = _env(host_dir)
+    secret = host_dir / "secret.txt"
+    secret.write_text("A")  # ord("A") == 65
+    _commit(
+        e["work"],
+        {"app.py": f"try:\n    raise SystemExit(ord(open({str(secret)!r}).read(1)))\nexcept OSError:\n    pass\ndef add(a, b):\n    return a + b\n"},
+    )
+    dec, rec = e["ext"].handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED"
+    assert rec.exit_code != 65
+
+
+def test_unregistered_caller_name_is_refused_by_default(tmp_path):
+    """The original bypass: any token naming an unregistered caller authenticated as that caller."""
+    e = _env(tmp_path)
+    e["ledger"].set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                           allowed_callers=[*SECRETS, "eve"])
+    msg = pack_tool_call_message(_prop("verify", "mallory"), auth_token="eve:anything")
+    prop, _ = unpack_tool_call_message(msg)
+    dec, _ = e["ext"].handle_proposal(prop)
+    assert dec.action == "deny"
+    assert dec.reason_code == "CALLER_AUTH_INVALID"
+
+
+def test_invalid_branch_denied_before_receipt_is_consumed(tmp_path):
+    e = _env(tmp_path)
+    e["ledger"].set_policy(repo_id="svc", destination="prod", profile_id="p", command=[sys.executable, "test_ok.py"],
+                           allowed_callers=list(SECRETS), allowed_branches=["main", "bench-*"])
+    _, rec = e["ext"].handle_proposal(_prop("verify", "alice"))
+    bad, _ = e["ext"].handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id, branch="bench-.."))
+    assert bad.reason_code == "BRANCH_NOT_ALLOWED"
+    ok, _ = e["ext"].handle_proposal(_prop("publish", "alice", receipt_id=rec.receipt_id, branch="main"))
+    assert ok.action == "allow"
+
+
+def test_gate_defaults_to_unauthenticated():
+    import inspect
+
+    from nlip_receipts import evaluate_type3_gate
+
+    assert inspect.signature(evaluate_type3_gate).parameters["caller_authenticated"].default is False
+
+
+def test_wrong_secret_for_registered_caller_cannot_impersonate(tmp_path):
     """Holding another caller's receipt id and asserting their name, without their secret, is denied."""
     e = _env(tmp_path)
     _, rec = e["ext"].handle_proposal(_prop("verify", "alice"))

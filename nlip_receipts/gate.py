@@ -22,6 +22,7 @@ from .git_artifact import (
     ArtifactError,
     SandboxUnavailable,
     compute_env_fingerprint,
+    is_valid_branch_name,
     push_immutable_commit,
     resolve_commit_and_tree,
     run_verification_in_snapshot,
@@ -47,10 +48,14 @@ def evaluate_type3_gate(
     receipt_hmac_valid: bool,
     policy: Optional[PolicyConfig],
     now: float,
-    caller_authenticated: bool = True,
+    caller_authenticated: bool = False,
     verify_isolation: str = "required",
 ) -> Type3Decision:
-    """Pure boundary decision function for `publish` invocations at the Type-3 control point."""
+    """Pure boundary decision function for `publish` invocations at the Type-3 control point.
+
+    `caller_authenticated` defaults to False (fail closed): callers must pass the result of
+    `ReceiptLedger.verify_caller_secret`.
+    """
     base_kwargs = {
         "operation": proposal.operation,
         "repo_id": proposal.repo_id,
@@ -97,7 +102,9 @@ def evaluate_type3_gate(
             **base_kwargs,
         )
 
-    if not any(fnmatch.fnmatchcase(proposal.branch, pat) for pat in policy.allowed_branches):
+    if not is_valid_branch_name(proposal.branch) or not any(
+        fnmatch.fnmatchcase(proposal.branch, pat) for pat in policy.allowed_branches
+    ):
         return Type3Decision(
             action="deny",
             reason_code="BRANCH_NOT_ALLOWED",

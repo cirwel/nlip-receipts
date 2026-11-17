@@ -39,13 +39,29 @@ class SandboxUnavailable(ArtifactError):
 # ── Verification sandbox ──────────────────────────────────────────────────────
 # `verify` executes code from the untrusted tree (the test command imports it). Without OS
 # isolation that code runs with the SE's own privileges and can push to destinations or rewrite
-# the ledger directly, bypassing the gate. The sandbox denies network access and every
-# filesystem write outside the snapshot directory.
+# the ledger directly, bypassing the gate. The sandbox denies network and Unix-socket access,
+# host filesystem writes outside the snapshot directory, reads of user and temporary directories
+# other than the snapshot and the interpreter's install prefix, and (macOS) Mach service lookups
+# and signals to processes outside the sandbox.
 SANDBOX_MODES = ("required", "off")
+
+# Mach services Python and git need at startup; every other lookup (launchd job submission,
+# LaunchServices, XPC helpers that could run code outside the sandbox) is denied.
+_DARWIN_MACH_ALLOW = (
+    "com.apple.system.logger",
+    "com.apple.system.notification_center",
+    "com.apple.system.opendirectoryd.libinfo",
+)
+_DARWIN_PRIVATE_ROOTS = ("/Users", "/private/var/folders", "/Volumes", "/private/tmp")
 
 _DARWIN_PROFILE = """(version 1)
 (allow default)
 (deny network*)
+(deny mach-lookup)
+(allow mach-lookup {mach})
+(deny signal)
+(allow signal (target same-sandbox))
+(deny process-info* (target others))
 (deny file-write*)
 (allow file-write*
   (subpath {snap})
@@ -54,9 +70,10 @@ _DARWIN_PROFILE = """(version 1)
   (literal "/dev/tty")
   (literal "/dev/dtracehelper")
   (regex #"^/dev/fd/"))
+(deny file-read* {private})
+(allow file-read* (subpath {snap}) {prefixes})
+(allow file-read-metadata)
 """
-
-_sandbox_probe_cache: dict[str, bool] = {}
 
 
 def _sbpl_string(path: str) -> str:
@@ -69,7 +86,13 @@ def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
     if sys.platform == "darwin":
         exe = shutil.which("sandbox-exec")
         if exe:
-            return [exe, "-p", _DARWIN_PROFILE.format(snap=_sbpl_string(snap)), "--", *command]
+            profile = _DARWIN_PROFILE.format(
+                snap=_sbpl_string(snap),
+                mach=" ".join(f"(global-name {_sbpl_string(n)})" for n in _DARWIN_MACH_ALLOW),
+                private=" ".join(f"(subpath {_sbpl_string(p)})" for p in _DARWIN_PRIVATE_ROOTS),
+                prefixes=" ".join(f"(subpath {_sbpl_string(p)})" for p in _interpreter_prefixes(command)),
+            )
+            return [exe, "-p", profile, "--", *command]
         return None
     if sys.platform.startswith("linux"):
         exe = shutil.which("bwrap")
@@ -99,15 +122,20 @@ def _sandbox_argv(command: list[str], snap_dir: str) -> list[str] | None:
 _LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
 
 
-def _linux_readonly_paths(command: list[str]) -> list[str]:
-    """System directories plus the install prefixes of this interpreter and of `command[0]`."""
+def _interpreter_prefixes(command: list[str]) -> list[str]:
+    """Install prefixes of this interpreter and of `command[0]` (resolved through symlinks)."""
     prefixes = {sys.prefix, sys.base_prefix, sys.exec_prefix}
     resolved = shutil.which(command[0]) if command else None
     if resolved:
         for candidate in (resolved, os.path.realpath(resolved)):
             prefixes.add(os.path.dirname(os.path.dirname(os.path.abspath(candidate))))
+    return sorted(os.path.realpath(p) for p in prefixes if p and os.path.realpath(p) != "/")
+
+
+def _linux_readonly_paths(command: list[str]) -> list[str]:
+    """System directories plus the install prefixes of this interpreter and of `command[0]`."""
     out = list(_LINUX_SYSTEM_DIRS)
-    for prefix in sorted(prefixes):
+    for prefix in _interpreter_prefixes(command):
         if prefix and prefix != "/" and not any(
             prefix == d or prefix.startswith(d + "/") for d in _LINUX_SYSTEM_DIRS
         ):
@@ -116,30 +144,31 @@ def _linux_readonly_paths(command: list[str]) -> list[str]:
 
 
 def sandbox_available() -> bool:
-    """Return True if the host sandbox backend exists and can actually start a process."""
-    key = sys.platform
-    if key not in _sandbox_probe_cache:
-        with tempfile.TemporaryDirectory(prefix="nlip-se-probe-") as probe_dir:
-            argv = _sandbox_argv(["/bin/sh", "-c", "exit 0"], probe_dir)
-            ok = False
-            if argv is not None:
-                try:
-                    ok = (
-                        subprocess.run(
-                            argv,
-                            cwd=probe_dir,
-                            stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=10.0,
-                            check=False,
-                        ).returncode
-                        == 0
-                    )
-                except (OSError, subprocess.TimeoutExpired):
-                    ok = False
-            _sandbox_probe_cache[key] = ok
-    return _sandbox_probe_cache[key]
+    """Return True if the host sandbox backend exists and can start a process right now.
+
+    Not cached: if namespaces or the sandbox binary become unusable later, `verify` must report
+    SANDBOX_UNAVAILABLE rather than record a spurious "failed" receipt that would supersede an
+    earlier pass on the same tree.
+    """
+    with tempfile.TemporaryDirectory(prefix="nlip-se-probe-") as probe_dir:
+        argv = _sandbox_argv(["/bin/sh", "-c", "exit 0"], probe_dir)
+        if argv is None:
+            return False
+        try:
+            return (
+                subprocess.run(
+                    argv,
+                    cwd=os.path.realpath(probe_dir),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10.0,
+                    check=False,
+                ).returncode
+                == 0
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
 
 
 @dataclass(frozen=True)
@@ -408,10 +437,11 @@ def run_verification_in_snapshot(
             pinned_file_sha256=pinned_file_sha256,
             timeout=min(5.0, timeout),
         )
+        snap_real = os.path.realpath(snap_dir)
         clean_env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": snap_dir,
-            "TMPDIR": snap_dir,
+            "HOME": snap_real,
+            "TMPDIR": snap_real,
             "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -424,16 +454,19 @@ def run_verification_in_snapshot(
                 raise SandboxUnavailable("OS sandbox backend disappeared after probe")
             argv = wrapped
         t0 = time.perf_counter()
-        proc = subprocess.Popen(
-            argv,
-            cwd=snap_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            env=clean_env,
-            shell=False,
-            start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=snap_real,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=clean_env,
+                shell=False,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ArtifactError(f"could not start verification command: {exc}") from exc
         try:
             out_bytes, _ = proc.communicate(timeout=timeout)
             exit_code = int(proc.returncode)
@@ -458,6 +491,19 @@ def run_verification_in_snapshot(
     return exit_code, duration_ms, output_sha256, command_sha256, env_fingerprint
 
 
+_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+
+
+def is_valid_branch_name(branch: str) -> bool:
+    """Single-component branch names only: no '/', '..', leading '-'/'.', or '.lock' suffix."""
+    return bool(
+        isinstance(branch, str)
+        and _BRANCH_RE.fullmatch(branch)
+        and ".." not in branch
+        and not branch.endswith((".lock", "."))
+    )
+
+
 def push_immutable_commit(
     repo_path: str,
     commit_oid: str,
@@ -466,7 +512,7 @@ def push_immutable_commit(
     timeout: float = 10.0,
 ) -> str:
     """Push the exact verified `commit_oid` to `refs/heads/<branch>` in `dest_path`."""
-    if not branch or "/" in branch or ".." in branch or branch.startswith("-"):
+    if not is_valid_branch_name(branch):
         raise ArtifactError(f"invalid target branch name: {branch!r}")
     if not re.fullmatch(r"[0-9a-fA-F]{40}([0-9a-fA-F]{24})?", commit_oid):
         raise ArtifactError(f"invalid commit_oid format: {commit_oid!r}")
