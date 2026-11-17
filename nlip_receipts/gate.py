@@ -44,6 +44,7 @@ def evaluate_type3_gate(
     receipt_hmac_valid: bool,
     policy: Optional[PolicyConfig],
     now: float,
+    caller_authenticated: bool = True,
 ) -> Type3Decision:
     """Pure boundary decision function for `publish` invocations at the Type-3 control point."""
     base_kwargs = {
@@ -70,7 +71,16 @@ def evaluate_type3_gate(
             **base_kwargs,
         )
 
-    # 2. Enforce caller authorization (ECMA-434 §7.2.2)
+    # 2. Enforce caller authentication & authorization (ECMA-434 §7.2.1 & §7.2.2)
+    if not caller_authenticated:
+        return Type3Decision(
+            action="deny",
+            reason_code="CALLER_AUTH_INVALID",
+            message=f"[NLIP-SE Type-3] Denied publish: invalid authentication credential for caller '{proposal.caller_id}'.",
+            sco_refs=["ECMA-434:7.2.1", "ECMA-434:7.2.3"],
+            **base_kwargs,
+        )
+
     if policy.allowed_callers and proposal.caller_id not in policy.allowed_callers:
         return Type3Decision(
             action="deny",
@@ -83,19 +93,27 @@ def evaluate_type3_gate(
             **base_kwargs,
         )
 
-    # 3. Reject missing or unverified receipts (including forged submessages or self-reports)
-    if not proposal.receipt_id or receipt is None:
-        if proposal.untrusted_receipt_submessage is not None:
+    # 3. Reject missing, forged, or tampered receipt submessages
+    if proposal.untrusted_receipt_submessage is not None:
+        sub = proposal.untrusted_receipt_submessage
+        if (
+            receipt is None
+            or sub.get("receipt_id") != receipt.receipt_id
+            or sub.get("tree_oid") not in (None, receipt.tree_oid)
+            or sub.get("status") not in (None, receipt.status)
+        ):
             return Type3Decision(
                 action="deny",
                 reason_code="FORGED_RECEIPT_SUBMESSAGE",
                 message=(
                     "[NLIP-SE Type-3] Denied publish: incoming NLIP submessage contained an "
-                    "untrusted/forged receipt not present in the SE ledger."
+                    "untrusted/forged receipt inconsistent with the SE ledger."
                 ),
                 sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
                 **base_kwargs,
             )
+
+    if not proposal.receipt_id or receipt is None:
         return Type3Decision(
             action="deny",
             reason_code="MISSING_RECEIPT",
@@ -131,7 +149,7 @@ def evaluate_type3_gate(
         )
 
     # 6. Verify repository, destination, profile, and command digest binding (blocks destination substitution)
-    expected_cmd_sha, _ = compute_env_fingerprint(policy.command)
+    expected_cmd_sha, _ = compute_env_fingerprint(policy.command, policy.pinned_file_sha256)
     if (
         receipt.repo_id != proposal.repo_id
         or receipt.destination != proposal.destination
@@ -296,6 +314,7 @@ class Type3ReceiptExtension:
             return decision, None
 
         policy = self.ledger.get_policy(proposal.repo_id, proposal.destination, proposal.profile_id)
+        caller_auth_ok = self.ledger.verify_caller_secret(proposal.caller_id, proposal.caller_secret)
 
         if proposal.operation == "verify":
             if policy is None:
@@ -313,6 +332,24 @@ class Type3ReceiptExtension:
                     destination=proposal.destination,
                     commit_oid=artifact.commit_oid,
                     tree_oid=artifact.tree_oid,
+                    latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+                )
+                self.ledger.record_decision(decision)
+                return decision, None
+
+            if not caller_auth_ok:
+                decision = Type3Decision(
+                    action="deny",
+                    reason_code="CALLER_AUTH_INVALID",
+                    message=f"[NLIP-SE Type-3] Denied verify: invalid authentication credential for caller '{proposal.caller_id}'.",
+                    sco_refs=["ECMA-434:7.2.1", "ECMA-434:7.2.3"],
+                    operation="verify",
+                    repo_id=proposal.repo_id,
+                    caller_id=proposal.caller_id,
+                    destination=proposal.destination,
+                    commit_oid=artifact.commit_oid,
+                    tree_oid=artifact.tree_oid,
+                    policy_epoch=policy.policy_epoch,
                     latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
                 )
                 self.ledger.record_decision(decision)
@@ -336,9 +373,30 @@ class Type3ReceiptExtension:
                 self.ledger.record_decision(decision)
                 return decision, None
 
-            exit_code, run_ms, out_sha, cmd_sha, env_fp = run_verification_in_snapshot(
-                repo_path, artifact.tree_oid, policy.command
-            )
+            try:
+                exit_code, run_ms, out_sha, cmd_sha, env_fp = run_verification_in_snapshot(
+                    repo_path,
+                    artifact.tree_oid,
+                    policy.command,
+                    pinned_file_sha256=policy.pinned_file_sha256,
+                )
+            except ArtifactError as exc:
+                decision = Type3Decision(
+                    action="deny",
+                    reason_code="SNAPSHOT_INTEGRITY_FAILED",
+                    message=f"[NLIP-SE Type-3] Denied verify: snapshot integrity or pinned-test check failed: {exc}",
+                    sco_refs=["ECMA-434:7.3.2", "ECMA-434:7.3.4"],
+                    operation="verify",
+                    repo_id=proposal.repo_id,
+                    caller_id=proposal.caller_id,
+                    destination=proposal.destination,
+                    commit_oid=artifact.commit_oid,
+                    tree_oid=artifact.tree_oid,
+                    policy_epoch=policy.policy_epoch,
+                    latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+                )
+                self.ledger.record_decision(decision)
+                return decision, None
             status = "passed" if exit_code == 0 else "failed"
             receipt = self.ledger.issue_receipt(
                 caller_id=proposal.caller_id,
@@ -384,7 +442,10 @@ class Type3ReceiptExtension:
         stored_receipt = self.ledger.get_receipt(proposal.receipt_id) if proposal.receipt_id else None
         hmac_valid = self.ledger.verify_receipt_hmac(stored_receipt) if stored_receipt else False
         latest_tree_rec = self.ledger.latest_receipt_for_tree(
-            proposal.repo_id, artifact.tree_oid, proposal.profile_id
+            proposal.repo_id,
+            artifact.tree_oid,
+            proposal.profile_id,
+            destination=proposal.destination,
         )
 
         decision = evaluate_type3_gate(
@@ -396,6 +457,7 @@ class Type3ReceiptExtension:
             receipt_hmac_valid=hmac_valid,
             policy=policy,
             now=current_time,
+            caller_authenticated=caller_auth_ok,
         )
 
         if decision.action == "allow" and stored_receipt is not None and policy is not None:
@@ -416,7 +478,9 @@ class Type3ReceiptExtension:
                     policy_epoch=policy.policy_epoch,
                 )
             else:
-                if policy.single_use and not self.ledger.mark_consumed(stored_receipt.receipt_id):
+                if policy.single_use and not self.ledger.mark_consumed(
+                    stored_receipt.receipt_id, expected_epoch=policy.policy_epoch
+                ):
                     decision = Type3Decision(
                         action="deny",
                         reason_code="RECEIPT_ALREADY_CONSUMED",
@@ -432,13 +496,29 @@ class Type3ReceiptExtension:
                         policy_epoch=policy.policy_epoch,
                     )
                 else:
-                    published_ref = push_immutable_commit(
-                        repo_path,
-                        artifact.commit_oid,
-                        dest_path,
-                        branch=proposal.branch,
-                    )
-                    decision.published_ref = published_ref
+                    try:
+                        published_ref = push_immutable_commit(
+                            repo_path,
+                            artifact.commit_oid,
+                            dest_path,
+                            branch=proposal.branch,
+                        )
+                        decision.published_ref = published_ref
+                    except ArtifactError as exc:
+                        decision = Type3Decision(
+                            action="deny",
+                            reason_code="PUBLISH_EXECUTION_FAILED",
+                            message=f"[NLIP-SE Type-3] Denied publish: destination push failed: {exc}",
+                            sco_refs=["ECMA-434:7.3.2"],
+                            operation="publish",
+                            repo_id=proposal.repo_id,
+                            caller_id=proposal.caller_id,
+                            destination=proposal.destination,
+                            commit_oid=artifact.commit_oid,
+                            tree_oid=artifact.tree_oid,
+                            receipt_id=stored_receipt.receipt_id,
+                            policy_epoch=policy.policy_epoch,
+                        )
 
         decision.latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
         self.ledger.record_decision(decision)

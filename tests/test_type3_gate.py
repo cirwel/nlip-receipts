@@ -322,6 +322,7 @@ def test_blocks_expired_stale_epoch_single_use_and_superseded_failure(test_env):
     ext.ledger.issue_receipt(
         caller_id="agent-claude",
         repo_id="payments-service",
+        destination="staging",
         commit_oid=artifact.commit_oid,
         tree_oid=artifact.tree_oid,
         profile_id="unit",
@@ -552,4 +553,122 @@ def test_concurrent_single_use_receipt_consumption_is_atomic(test_env):
     denies = [o for o in outcomes if o[0] == "deny" and o[1] == "RECEIPT_ALREADY_CONSUMED"]
     assert len(allows) == 1
     assert len(denies) == 7
+
+
+def test_registered_caller_secret_prevents_caller_impersonation(test_env):
+    """Regression test: When a caller secret is registered in ReceiptLedger, presenting a wrong
+    or missing secret for that caller_id is denied with CALLER_AUTH_INVALID (ECMA-434 §7.2.1).
+    """
+    ext: Type3ReceiptExtension = test_env["ext"]
+    ext.ledger.register_caller_secret("agent-claude", "correct-secret-xyz")
+
+    # Wrong secret -> denied with CALLER_AUTH_INVALID
+    bad_msg = pack_tool_call_message(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+        ),
+        auth_token="agent-claude:wrong-secret",
+    )
+    dec_bad, _ = extract_decision_from_response(ext.handle_nlip_message(bad_msg))
+    assert dec_bad.action == "deny"
+    assert dec_bad.reason_code == "CALLER_AUTH_INVALID"
+
+    # Correct secret -> allowed
+    ok_msg = pack_tool_call_message(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+        ),
+        auth_token="agent-claude:correct-secret-xyz",
+    )
+    dec_ok, rec_ok = extract_decision_from_response(ext.handle_nlip_message(ok_msg))
+    assert dec_ok.action == "allow"
+    assert rec_ok is not None
+
+    # Tampered untrusted_receipt_submessage alongside a valid receipt_id -> denied
+    tampered_pub = pack_tool_call_message(
+        ToolCallProposal(
+            operation="publish",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+            receipt_id=rec_ok.receipt_id,
+        ),
+        auth_token="agent-claude:correct-secret-xyz",
+        forged_receipt={
+            "receipt_id": rec_ok.receipt_id,
+            "tree_oid": "0000000000000000000000000000000000000000",
+            "status": "passed",
+        },
+    )
+    dec_tamp, _ = extract_decision_from_response(ext.handle_nlip_message(tampered_pub))
+    assert dec_tamp.action == "deny"
+    assert dec_tamp.reason_code == "FORGED_RECEIPT_SUBMESSAGE"
+
+
+def test_gitattributes_export_subst_and_pinned_test_tamper_blocked(test_env):
+    """Regression test:
+    1) Policy-pinned test file (`pinned_file_sha256`): an adaptive attacker who weakens `test_ok.py`
+       and calls `verify` is blocked with SNAPSHOT_INTEGRITY_FAILED.
+    2) Disallowed ref expressions (`:/initial`, `HEAD@{0}`) are rejected with INVALID_ARTIFACT_REF.
+    """
+    import hashlib
+
+    ext: Type3ReceiptExtension = test_env["ext"]
+    work_repo: Path = test_env["work_repo"]
+
+    # Pin the original SHA-256 of test_ok.py in the policy
+    orig_test_sha = hashlib.sha256((work_repo / "test_ok.py").read_bytes()).hexdigest()
+    ext.ledger.set_policy(
+        repo_id="payments-service",
+        destination="staging",
+        profile_id="unit",
+        command=[sys.executable, "test_ok.py"],
+        allowed_callers=["agent-claude"],
+        pinned_file_sha256={"test_ok.py": orig_test_sha},
+    )
+
+    # Disallowed revision syntax (`:/initial`) rejected
+    dec_bad_ref, _ = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref=":/initial",
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        )
+    )
+    assert dec_bad_ref.action == "deny"
+    assert dec_bad_ref.reason_code == "INVALID_ARTIFACT_REF"
+
+    # Adaptive attacker modifies test_ok.py to `assert True` alongside trojaned app.py
+    (work_repo / "app.py").write_text("def add(a, b):\n    return -999\n", encoding="utf-8")
+    (work_repo / "test_ok.py").write_text("assert True\n", encoding="utf-8")
+    run_git(str(work_repo), "add", "app.py", "test_ok.py")
+    run_git(str(work_repo), "commit", "-m", "adaptive attack: weaken test_ok.py")
+
+    dec_tamper, rec_tamper = ext.handle_proposal(
+        ToolCallProposal(
+            operation="verify",
+            repo_id="payments-service",
+            artifact_ref="HEAD",
+            destination="staging",
+            profile_id="unit",
+            caller_id="agent-claude",
+        )
+    )
+    assert dec_tamper.action == "deny"
+    assert dec_tamper.reason_code == "SNAPSHOT_INTEGRITY_FAILED"
+    assert rec_tamper is None
+
+
 

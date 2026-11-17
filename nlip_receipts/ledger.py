@@ -21,12 +21,17 @@ _DDL = (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS caller_credentials (
+        caller_id TEXT PRIMARY KEY,
+        secret_hmac TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS policies (
         repo_id TEXT NOT NULL,
         destination TEXT NOT NULL,
         profile_id TEXT NOT NULL,
         command_json TEXT NOT NULL,
         allowed_callers_json TEXT NOT NULL,
+        pinned_files_json TEXT NOT NULL DEFAULT '{}',
         ttl_seconds REAL NOT NULL,
         single_use INTEGER NOT NULL,
         policy_epoch INTEGER NOT NULL,
@@ -107,17 +112,60 @@ class ReceiptLedger:
             return str(row["value"]) if row else "nlip-se-unknown"
 
     def _compute_receipt_hmac(self, rec: VerificationReceipt) -> str:
-        canonical = (
-            f"{rec.receipt_id}|{rec.issuer_id}|{rec.caller_id}|{rec.repo_id}|"
-            f"{rec.destination}|{rec.commit_oid}|{rec.tree_oid}|{rec.profile_id}|"
-            f"{rec.command_sha256}|{rec.env_fingerprint}|{rec.status}|{rec.exit_code}|"
-            f"{rec.policy_epoch}|{rec.issued_at:.6f}|{rec.expires_at:.6f}"
-        ).encode("utf-8")
+        fields = [
+            rec.receipt_id,
+            rec.issuer_id,
+            rec.caller_id,
+            rec.repo_id,
+            rec.destination,
+            rec.commit_oid,
+            rec.tree_oid,
+            rec.profile_id,
+            rec.command_sha256,
+            rec.env_fingerprint,
+            rec.status,
+            str(rec.exit_code),
+            str(rec.policy_epoch),
+            f"{rec.issued_at:.6f}",
+            f"{rec.expires_at:.6f}",
+        ]
+        canonical = "|".join(f"{len(f)}:{f}" for f in fields).encode("utf-8")
         return hmac.new(self._hmac_key, canonical, hashlib.sha256).hexdigest()
 
     def verify_receipt_hmac(self, rec: VerificationReceipt) -> bool:
         expected = self._compute_receipt_hmac(rec)
         return hmac.compare_digest(expected, rec.hmac_tag or "")
+
+    # ── Caller Credential Verification (ECMA-434 §7.2.1) ────────────────────
+    def register_caller_secret(self, caller_id: str, secret: str) -> None:
+        tag = hmac.new(
+            self._hmac_key, f"caller:{caller_id}:{secret}".encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        with self._lock, closing(self._connect()) as conn, conn:
+            conn.execute(
+                """INSERT INTO caller_credentials (caller_id, secret_hmac)
+                   VALUES (?, ?)
+                   ON CONFLICT(caller_id) DO UPDATE SET secret_hmac = excluded.secret_hmac""",
+                (caller_id, tag),
+            )
+
+    def verify_caller_secret(self, caller_id: str, secret: Optional[str]) -> bool:
+        """If a secret is registered for `caller_id`, verify `secret` via HMAC.
+        If no secret is registered for `caller_id`, return True (allowing unkeyed local tests).
+        """
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT secret_hmac FROM caller_credentials WHERE caller_id = ?",
+                (caller_id,),
+            ).fetchone()
+        if not row:
+            return True
+        if not secret:
+            return False
+        candidate = hmac.new(
+            self._hmac_key, f"caller:{caller_id}:{secret}".encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(str(row["secret_hmac"]), candidate)
 
     # ── Policy Management ───────────────────────────────────────────────────
     def set_policy(
@@ -128,10 +176,12 @@ class ReceiptLedger:
         profile_id: str = "default",
         command: list[str],
         allowed_callers: list[str],
+        pinned_file_sha256: Optional[dict[str, str]] = None,
         ttl_seconds: float = 900.0,
         single_use: bool = True,
     ) -> PolicyConfig:
         now = time.time()
+        pinned = pinned_file_sha256 or {}
         with self._lock, closing(self._connect()) as conn, conn:
             existing = conn.execute(
                 "SELECT policy_epoch FROM policies WHERE repo_id = ? AND destination = ? AND profile_id = ?",
@@ -141,11 +191,12 @@ class ReceiptLedger:
             conn.execute(
                 """INSERT INTO policies (
                     repo_id, destination, profile_id, command_json, allowed_callers_json,
-                    ttl_seconds, single_use, policy_epoch, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pinned_files_json, ttl_seconds, single_use, policy_epoch, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repo_id, destination, profile_id) DO UPDATE SET
                     command_json = excluded.command_json,
                     allowed_callers_json = excluded.allowed_callers_json,
+                    pinned_files_json = excluded.pinned_files_json,
                     ttl_seconds = excluded.ttl_seconds,
                     single_use = excluded.single_use,
                     policy_epoch = excluded.policy_epoch,
@@ -157,6 +208,7 @@ class ReceiptLedger:
                     profile_id,
                     json.dumps(command),
                     json.dumps(allowed_callers),
+                    json.dumps(pinned, sort_keys=True),
                     float(ttl_seconds),
                     1 if single_use else 0,
                     next_epoch,
@@ -169,6 +221,7 @@ class ReceiptLedger:
             profile_id=profile_id,
             command=command,
             allowed_callers=allowed_callers,
+            pinned_file_sha256=pinned,
             ttl_seconds=ttl_seconds,
             single_use=single_use,
             policy_epoch=next_epoch,
@@ -188,6 +241,7 @@ class ReceiptLedger:
             profile_id=row["profile_id"],
             command=json.loads(row["command_json"]),
             allowed_callers=json.loads(row["allowed_callers_json"]),
+            pinned_file_sha256=json.loads(row["pinned_files_json"] or "{}"),
             ttl_seconds=float(row["ttl_seconds"]),
             single_use=bool(row["single_use"]),
             policy_epoch=int(row["policy_epoch"]),
@@ -299,28 +353,74 @@ class ReceiptLedger:
         return self._row_to_receipt(row) if row else None
 
     def latest_receipt_for_tree(
-        self, repo_id: str, tree_oid: str, profile_id: str
+        self,
+        repo_id: str,
+        tree_oid: str,
+        profile_id: str,
+        destination: Optional[str] = None,
     ) -> Optional[VerificationReceipt]:
-        """Return the most recent verification receipt for `(repo_id, tree_oid, profile_id)`.
+        """Return the most recent verification receipt for `(repo_id, [destination,] tree_oid, profile_id)`.
         Used to enforce the superseding-failure invariant: a newer failed run on the same tree
         invalidates any older passing receipt for that tree.
         """
         with self._lock, closing(self._connect()) as conn:
-            row = conn.execute(
-                """SELECT * FROM receipts
-                   WHERE repo_id = ? AND tree_oid = ? AND profile_id = ?
-                   ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
-                (repo_id, tree_oid, profile_id),
-            ).fetchone()
+            if destination is not None:
+                row = conn.execute(
+                    """SELECT * FROM receipts
+                       WHERE repo_id = ? AND destination = ? AND tree_oid = ? AND profile_id = ?
+                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                    (repo_id, destination, tree_oid, profile_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT * FROM receipts
+                       WHERE repo_id = ? AND tree_oid = ? AND profile_id = ?
+                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                    (repo_id, tree_oid, profile_id),
+                ).fetchone()
         return self._row_to_receipt(row) if row else None
 
-    def mark_consumed(self, receipt_id: str) -> bool:
-        with self._lock, closing(self._connect()) as conn, conn:
-            cur = conn.execute(
-                "UPDATE receipts SET consumed = 1 WHERE receipt_id = ? AND consumed = 0",
-                (receipt_id,),
-            )
-            return cur.rowcount == 1
+    def mark_consumed(
+        self,
+        receipt_id: str,
+        *,
+        expected_epoch: Optional[int] = None,
+    ) -> bool:
+        """Atomically consume `receipt_id` inside an immediate transaction, re-verifying that
+        `consumed = 0`, `policy_epoch` has not rotated, and no newer failure superseded the tree.
+        """
+        with self._lock, closing(self._connect()) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT rowid, * FROM receipts WHERE receipt_id = ?",
+                    (receipt_id,),
+                ).fetchone()
+                if not row or int(row["consumed"]) != 0:
+                    conn.execute("ROLLBACK")
+                    return False
+                if expected_epoch is not None and int(row["policy_epoch"]) != int(expected_epoch):
+                    conn.execute("ROLLBACK")
+                    return False
+                latest = conn.execute(
+                    """SELECT status FROM receipts
+                       WHERE repo_id = ? AND destination = ? AND tree_oid = ? AND profile_id = ?
+                       ORDER BY issued_at DESC, rowid DESC LIMIT 1""",
+                    (row["repo_id"], row["destination"], row["tree_oid"], row["profile_id"]),
+                ).fetchone()
+                if latest and latest["status"] != "passed":
+                    conn.execute("ROLLBACK")
+                    return False
+                cur = conn.execute(
+                    "UPDATE receipts SET consumed = 1 WHERE receipt_id = ? AND consumed = 0",
+                    (receipt_id,),
+                )
+                conn.execute("COMMIT")
+                return cur.rowcount == 1
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     # ── Audit Log (ECMA-434 §7.2.4) ─────────────────────────────────────────
     def record_decision(self, decision: Type3Decision) -> str:

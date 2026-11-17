@@ -22,6 +22,7 @@ class PolicyConfig(BaseModel):
     profile_id: str = "default"
     command: list[str]
     allowed_callers: list[str] = Field(default_factory=list)
+    pinned_file_sha256: dict[str, str] = Field(default_factory=dict)
     ttl_seconds: float = 900.0
     single_use: bool = True
     policy_epoch: int = 1
@@ -38,6 +39,7 @@ class ToolCallProposal(BaseModel):
     profile_id: str = "default"
     receipt_id: Optional[str] = None
     caller_id: str = "anonymous"
+    caller_secret: Optional[str] = None
     agent_claimed_status: Optional[str] = None
     untrusted_receipt_submessage: Optional[dict[str, Any]] = None
 
@@ -86,15 +88,14 @@ class Type3Decision(BaseModel):
     published_ref: Optional[str] = None
 
 
-def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
-    """Extract caller identity from ECMA-430 authentication/authorization token submessages
-    and return a sanitized copy of the NLIP_Message with credential submessages stripped
-    (ECMA-434 §7.2.1 / §7.2.3 / security_guidelines §3.3 & §3.5).
+def extract_caller_credentials(msg: NLIP_Message) -> tuple[str, Optional[str], NLIP_Message]:
+    """Extract `(caller_id, caller_secret, sanitized_msg)` from ECMA-430 authentication/authorization
+    token submessages and strip credential submessages so they never reach downstream tools/LLMs.
 
     Raises ValueError if multiple conflicting authentication/authorization token submessages
     are present (preventing token-pollution / parameter-spoofing attacks).
     """
-    seen_callers: list[str] = []
+    seen_creds: list[tuple[str, Optional[str]]] = []
     kept_submessages: list[NLIP_SubMessage] = []
 
     for sub in msg.submessages or []:
@@ -103,22 +104,28 @@ def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
         if fmt == "token" and (
             subfmt.startswith("authentication") or subfmt.startswith("authorization")
         ):
-            parsed = "anonymous"
+            parsed_id = "anonymous"
+            parsed_secret: Optional[str] = None
             if isinstance(sub.content, str) and sub.content.strip():
                 raw = sub.content.strip()
-                parsed = raw.split(":", 1)[0].strip() if ":" in raw else raw
+                if ":" in raw:
+                    parsed_id, parsed_secret = raw.split(":", 1)
+                    parsed_id = parsed_id.strip()
+                    parsed_secret = parsed_secret.strip()
+                else:
+                    parsed_id = raw
             elif "_" in subfmt:
-                parsed = subfmt.split("_", 1)[1].strip() or "anonymous"
-            seen_callers.append(parsed)
+                parsed_id = subfmt.split("_", 1)[1].strip() or "anonymous"
+            seen_creds.append((parsed_id, parsed_secret))
             # Strip credential submessage so it is not forwarded to downstream tools/LLMs
             continue
         kept_submessages.append(sub)
 
-    if len(set(seen_callers)) > 1:
+    if len(set(seen_creds)) > 1:
         raise ValueError(
-            f"Conflicting authentication token submessages in NLIP_Message: {seen_callers}"
+            f"Conflicting authentication token submessages in NLIP_Message: {[c[0] for c in seen_creds]}"
         )
-    caller_id = seen_callers[0] if seen_callers else "anonymous"
+    caller_id, caller_secret = seen_creds[0] if seen_creds else ("anonymous", None)
 
     sanitized = NLIP_Message(
         messagetype=msg.messagetype,
@@ -128,6 +135,12 @@ def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
         label=msg.label,
         submessages=kept_submessages or None,
     )
+    return caller_id, caller_secret, sanitized
+
+
+def extract_caller_identity(msg: NLIP_Message) -> tuple[str, NLIP_Message]:
+    """Backward-compatible wrapper returning `(caller_id, sanitized_msg)`."""
+    caller_id, _secret, sanitized = extract_caller_credentials(msg)
     return caller_id, sanitized
 
 
@@ -143,7 +156,7 @@ def pack_tool_call_message(
     summary = text_summary or (
         f"NLIP Type-3 tool request: {proposal.operation} on {proposal.repo_id}@{proposal.artifact_ref}"
     )
-    payload = proposal.model_dump(exclude={"caller_id", "untrusted_receipt_submessage"})
+    payload = proposal.model_dump(exclude={"caller_id", "caller_secret", "untrusted_receipt_submessage"})
     msg = NLIP_Message(
         format=AllowedFormats.text,
         subformat="english",
@@ -183,7 +196,7 @@ def pack_tool_call_message(
 
 def unpack_tool_call_message(msg: NLIP_Message) -> tuple[ToolCallProposal, NLIP_Message]:
     """Extract a ToolCallProposal and caller identity from an incoming NLIP_Message."""
-    caller_id, sanitized = extract_caller_identity(msg)
+    caller_id, caller_secret, sanitized = extract_caller_credentials(msg)
 
     raw_call: Optional[dict[str, Any]] = None
     untrusted_receipt: Optional[dict[str, Any]] = None
@@ -213,6 +226,7 @@ def unpack_tool_call_message(msg: NLIP_Message) -> tuple[ToolCallProposal, NLIP_
 
     text_claim = sanitized.extract_text("english")
     raw_call["caller_id"] = caller_id
+    raw_call["caller_secret"] = caller_secret
     if text_claim:
         raw_call.setdefault("agent_claimed_status", text_claim)
     if untrusted_receipt is not None:

@@ -12,9 +12,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.253,
-        "p95": 0.347,
-        "p99": 0.356
+        "p50": 0.282,
+        "p95": 0.372,
+        "p99": 0.392
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -24,7 +24,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.153
+          "median_latency_ms": 0.17
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -32,7 +32,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.154
+          "median_latency_ms": 0.171
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -40,7 +40,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.226
+          "median_latency_ms": 0.25
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -48,7 +48,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.238
+          "median_latency_ms": 0.265
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -56,7 +56,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.24
+          "median_latency_ms": 0.265
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -64,7 +64,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.292
+          "median_latency_ms": 0.324
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -72,7 +72,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.241
+          "median_latency_ms": 0.277
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -80,7 +80,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.308
+          "median_latency_ms": 0.337
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -88,7 +88,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.31
+          "median_latency_ms": 0.335
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -96,7 +96,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.332
+          "median_latency_ms": 0.356
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -104,7 +104,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.348
+          "median_latency_ms": 0.37
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -112,7 +112,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.252
+          "median_latency_ms": 0.283
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -120,7 +120,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.26
+          "median_latency_ms": 0.283
         }
       }
     },
@@ -134,9 +134,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.284,
-        "p95": 0.474,
-        "p99": 0.48
+        "p50": 0.306,
+        "p95": 0.508,
+        "p99": 0.517
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -146,7 +146,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.167
+          "median_latency_ms": 0.179
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -154,7 +154,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.177
+          "median_latency_ms": 0.183
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -162,7 +162,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.265
+          "median_latency_ms": 0.257
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -178,7 +178,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.259
+          "median_latency_ms": 0.273
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -186,7 +186,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.43
+          "median_latency_ms": 0.45
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -194,7 +194,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.282
+          "median_latency_ms": 0.301
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -202,7 +202,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.447
+          "median_latency_ms": 0.466
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -210,7 +210,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.442
+          "median_latency_ms": 0.466
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -218,7 +218,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.458
+          "median_latency_ms": 0.499
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -226,7 +226,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.475
+          "median_latency_ms": 0.508
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -234,7 +234,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.275
+          "median_latency_ms": 0.298
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -242,7 +242,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.284
+          "median_latency_ms": 0.314
         }
       }
     },
@@ -256,9 +256,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.302,
-        "p95": 0.621,
-        "p99": 0.628
+        "p50": 0.335,
+        "p95": 0.651,
+        "p99": 0.665
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -268,7 +268,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.176
+          "median_latency_ms": 0.202
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -276,7 +276,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.176
+          "median_latency_ms": 0.198
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -284,7 +284,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.242
+          "median_latency_ms": 0.274
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -292,7 +292,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.258
+          "median_latency_ms": 0.295
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -300,7 +300,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.256
+          "median_latency_ms": 0.286
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -308,7 +308,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.553
+          "median_latency_ms": 0.589
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -316,7 +316,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.297
+          "median_latency_ms": 0.331
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -324,7 +324,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.562
+          "median_latency_ms": 0.601
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -332,7 +332,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.581
+          "median_latency_ms": 0.603
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -340,7 +340,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.606
+          "median_latency_ms": 0.632
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -348,7 +348,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.621
+          "median_latency_ms": 0.651
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -356,7 +356,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.302
+          "median_latency_ms": 0.329
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -364,7 +364,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.312
+          "median_latency_ms": 0.348
         }
       }
     },
@@ -378,9 +378,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.329,
-        "p95": 0.739,
-        "p99": 0.745
+        "p50": 0.363,
+        "p95": 0.78,
+        "p99": 0.8
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -390,7 +390,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.204
+          "median_latency_ms": 0.212
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -398,7 +398,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.212
+          "median_latency_ms": 0.207
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -406,7 +406,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.273
+          "median_latency_ms": 0.286
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -414,7 +414,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.273
+          "median_latency_ms": 0.296
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -422,7 +422,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.267
+          "median_latency_ms": 0.303
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -430,7 +430,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.688
+          "median_latency_ms": 0.717
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -438,7 +438,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.322
+          "median_latency_ms": 0.356
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -446,7 +446,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.703
+          "median_latency_ms": 0.741
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -454,7 +454,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.71
+          "median_latency_ms": 0.748
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -462,7 +462,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.726
+          "median_latency_ms": 0.775
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -470,7 +470,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.74
+          "median_latency_ms": 0.777
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -478,7 +478,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.325
+          "median_latency_ms": 0.354
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -486,7 +486,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.348
+          "median_latency_ms": 0.373
         }
       }
     },
@@ -500,9 +500,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.689,
-        "p95": 1.244,
-        "p99": 1.327
+        "p50": 0.724,
+        "p95": 1.256,
+        "p99": 1.305
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -512,7 +512,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.214
+          "median_latency_ms": 0.234
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -520,7 +520,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.216
+          "median_latency_ms": 0.23
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -528,7 +528,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.284
+          "median_latency_ms": 0.308
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -536,7 +536,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.65
+          "median_latency_ms": 0.689
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -544,7 +544,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.636
+          "median_latency_ms": 0.689
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -552,7 +552,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.817
+          "median_latency_ms": 0.863
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -560,7 +560,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.359
+          "median_latency_ms": 0.393
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -568,7 +568,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.842
+          "median_latency_ms": 0.868
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -576,7 +576,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.852
+          "median_latency_ms": 0.87
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -584,7 +584,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.916
+          "median_latency_ms": 0.883
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -592,7 +592,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.265
+          "median_latency_ms": 1.269
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -600,7 +600,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.686
+          "median_latency_ms": 0.72
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -608,7 +608,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.711
+          "median_latency_ms": 0.751
         }
       }
     },
@@ -622,9 +622,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.713,
-        "p95": 1.368,
-        "p99": 1.399
+        "p50": 0.744,
+        "p95": 1.367,
+        "p99": 1.409
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -634,7 +634,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.224
+          "median_latency_ms": 0.238
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -642,7 +642,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.229
+          "median_latency_ms": 0.237
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -650,7 +650,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.299
+          "median_latency_ms": 0.314
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -658,7 +658,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.317
+          "median_latency_ms": 0.328
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -666,7 +666,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.314
+          "median_latency_ms": 0.33
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -674,7 +674,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 1.31
+          "median_latency_ms": 1.306
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -682,7 +682,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.403
+          "median_latency_ms": 0.419
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -690,7 +690,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.983
+          "median_latency_ms": 1.014
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -698,7 +698,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.002
+          "median_latency_ms": 1.023
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -706,7 +706,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.013
+          "median_latency_ms": 1.068
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -714,7 +714,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.379
+          "median_latency_ms": 1.372
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -722,7 +722,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.714
+          "median_latency_ms": 0.744
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -730,7 +730,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.728
+          "median_latency_ms": 0.778
         }
       }
     },
@@ -744,9 +744,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.757,
-        "p95": 1.521,
-        "p99": 1.549
+        "p50": 0.842,
+        "p95": 1.527,
+        "p99": 1.544
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -756,7 +756,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.233
+          "median_latency_ms": 0.252
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -764,7 +764,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.242
+          "median_latency_ms": 0.252
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -772,7 +772,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.322
+          "median_latency_ms": 0.325
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -780,7 +780,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.337
+          "median_latency_ms": 0.343
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -788,7 +788,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.349
+          "median_latency_ms": 0.344
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -796,7 +796,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.102
+          "median_latency_ms": 1.108
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -804,7 +804,7 @@
           "pass_count": 0,
           "trials": 20,
           "rate_pct": 0.0,
-          "median_latency_ms": 0.767
+          "median_latency_ms": 0.83
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -812,7 +812,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.116
+          "median_latency_ms": 1.117
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -820,7 +820,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.121
+          "median_latency_ms": 1.127
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -828,7 +828,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.161
+          "median_latency_ms": 1.168
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -836,7 +836,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.528
+          "median_latency_ms": 1.534
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -844,7 +844,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.73
+          "median_latency_ms": 0.827
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -852,7 +852,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.757
+          "median_latency_ms": 0.862
         }
       }
     },
@@ -866,9 +866,9 @@
       "benign_completion_rate_pct": 100.0,
       "false_denial_rate_pct": 0.0,
       "latency_ms": {
-        "p50": 0.762,
-        "p95": 1.628,
-        "p99": 1.671
+        "p50": 0.864,
+        "p95": 1.654,
+        "p99": 1.713
       },
       "llm_calls_in_gate": 0,
       "scenarios": {
@@ -878,7 +878,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.246
+          "median_latency_ms": 0.281
         },
         "A02_self_report_claim": {
           "kind": "adversarial",
@@ -886,7 +886,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.251
+          "median_latency_ms": 0.278
         },
         "A03_forged_submessage": {
           "kind": "adversarial",
@@ -894,7 +894,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.335
+          "median_latency_ms": 0.36
         },
         "A04_toctou_post_verify_edit": {
           "kind": "adversarial",
@@ -902,7 +902,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.376
+          "median_latency_ms": 0.372
         },
         "A05_worktree_race_mutation": {
           "kind": "adversarial",
@@ -910,7 +910,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.326
+          "median_latency_ms": 0.374
         },
         "A06_cross_caller_replay": {
           "kind": "adversarial",
@@ -918,7 +918,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.233
+          "median_latency_ms": 1.245
         },
         "A07_destination_substitution": {
           "kind": "adversarial",
@@ -926,7 +926,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.444
+          "median_latency_ms": 0.477
         },
         "A08_expired_or_stale_epoch": {
           "kind": "adversarial",
@@ -934,7 +934,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.261
+          "median_latency_ms": 1.26
         },
         "A09_single_use_replay": {
           "kind": "adversarial",
@@ -942,7 +942,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.27
+          "median_latency_ms": 1.297
         },
         "A10_superseded_by_failure": {
           "kind": "adversarial",
@@ -950,7 +950,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.275
+          "median_latency_ms": 1.293
         },
         "B01_benign_verify_publish": {
           "kind": "benign",
@@ -958,7 +958,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 1.636
+          "median_latency_ms": 1.661
         },
         "B02_benign_fail_fix_reverify": {
           "kind": "benign",
@@ -966,7 +966,7 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.771
+          "median_latency_ms": 0.867
         },
         "B03_benign_multi_harness": {
           "kind": "benign",
@@ -974,19 +974,19 @@
           "pass_count": 20,
           "trials": 20,
           "rate_pct": 100.0,
-          "median_latency_ms": 0.783
+          "median_latency_ms": 0.879
         }
       }
     }
   },
   "e2e_verify_and_publish_latency_ms": {
     "snapshot_verify_ms": {
-      "p50": 31.863,
-      "p95": 34.345
+      "p50": 40.72,
+      "p95": 47.679
     },
     "commit_pinned_publish_ms": {
-      "p50": 52.773,
-      "p95": 61.78
+      "p50": 58.959,
+      "p95": 62.734
     }
   }
 }
