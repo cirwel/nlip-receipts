@@ -57,10 +57,9 @@ This project builds on the author's prior open-source Hermes plugin [`hermes-rec
 
 ### Setup
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install pydantic fastapi uvicorn httpx pytest python-multipart ./.ref/nlip_sdk ./.ref/nlip_server
+make setup
 ```
+*(Creates `.venv` and installs `nlip_sdk` and `nlip_server` directly from `github.com/nlip-project` along with `fastapi`, `pydantic`, `httpx`, and `pytest`.)*
 
 ### Run Unit & Integration Tests (`make test`)
 ```bash

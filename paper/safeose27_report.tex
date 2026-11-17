@@ -236,8 +236,11 @@ Santiago Torres-Arias et al. 2019. \emph{in-toto: Providing Farm-to-Table Guaran
 
 \appendix
 \section{Artifact Reproducibility Appendix}
-All code, schemas, adapters, tests, and evaluation scripts are released under the Apache-2.0 License:
+All code, schemas, adapters, tests, and evaluation scripts are released under the Apache-2.0 License at \url{https://github.com/cirwel/nlip-receipts}:
 \begin{lstlisting}
+# 0. One-command environment setup (installs nlip_sdk & nlip_server)
+make setup
+
 # 1. Run the 11 end-to-end pytest suites (HTTP, TOCTOU, Replay, Concurrency, 3 Adapters)
 make test
 
