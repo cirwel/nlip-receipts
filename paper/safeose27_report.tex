@@ -14,12 +14,13 @@
 \title{Execution-Attested Side-Effect Gating at the NLIP Type-3 Boundary}
 \subtitle{NDSS SafeOSE '27 Open-Source AI Security Hackathon Report --- Focus Area 3}
 
-\author{CIRWEL}
+\author{Kenny Wang}
+\orcid{0009-0006-7544-2374}
 \affiliation{%
-  \institution{Independent Security Research}
+  \institution{CIRWEL Research}
   \country{USA}
 }
-\email{cirwel@users.noreply.github.com}
+\email{founder@cirwel.org}
 
 \begin{abstract}
 Open-source AI agents increasingly invoke side-effecting tools (such as publishing code, creating pull requests, or mutating shared repositories) across standardized communication layers like the Natural Language Interaction Protocol (NLIP, ECMA-430). However, current reference implementations (\texttt{nlip\_server} and \texttt{nlip\_sdk}) provide no communication-layer reference monitor at the Type-3 tool boundary, leaving side-effecting operations vulnerable to unverified execution, agent self-report fabrication (\emph{``all tests passed''}), forged protocol submessages, Confused-Deputy replay, and Time-of-Check-to-Time-of-Use (TOCTOU) working-tree mutations.
