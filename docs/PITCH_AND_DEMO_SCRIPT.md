@@ -24,9 +24,9 @@
 
 **Visual:** Show `verify` → protected ledger → `publish`, then `evaluate_type3_gate()`.
 
-> "The extension mediates two operations: verify and publish. Verify exports an immutable Git snapshot and runs an operator-configured command inside an OS sandbox. The supervisor records the result in its protected ledger.
+> "The extension mediates two operations: verify and publish. Verify exports an immutable Git snapshot and runs an operator-configured command inside an OS sandbox. The supervisor records the result in its ledger. Keep the ledger in a dedicated directory: the sandbox masks that directory, the repositories and the destinations, and if it cannot set itself up that way, verify is refused and no receipt is recorded.
 >
-> Publish checks that the receipt matches the caller, artifact, destination profile and current policy, then pushes the exact verified commit. The decision needs no LLM calls or hidden agent reasoning.
+> Publish checks that the receipt matches the caller, artifact, destination profile and current policy, then pushes the exact verified commit. By default the receipt must name that commit ID; a policy that sets `allow_tree_equivalent_commits` also accepts a different commit with the same tree, and pushes that commit. The decision needs no LLM calls or hidden agent reasoning.
 >
 > This assumes the agent cannot bypass the extension with separate publication credentials. And the receipt records a command exiting zero, not proof of code correctness. Malicious code can force its test process to exit zero; that requires a stronger verifier."
 
