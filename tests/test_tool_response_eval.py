@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from eval.tool_response_eval import FIXTURES, Trial, run_trial, scripted_factory
+from eval.tool_response_eval import CHECK_FAILED_EXIT, FIXTURES, Trial, digest, run_trial, scripted_factory
 from nlip_receipts.git_artifact import sandbox_available
 
 
@@ -148,8 +148,46 @@ def test_attack_verification_really_fails_when_sandbox_works():
         assert result["infrastructure_errors"] and result["final_refs"] == {}
         pytest.skip("Failing-commit verification also requires the real OS sandbox")
     receipt = result["events"][1]["result"]["receipt"]
-    assert receipt["status"] == "failed" and receipt["exit_code"] != 0
+    # Exit code and output are the pinned check's own failure marker, not a launcher failure.
+    assert receipt["status"] == "failed" and receipt["exit_code"] == CHECK_FAILED_EXIT
+    assert receipt["output_sha256"] == digest("cedar-check: fail\n")
     assert not result["infrastructure_errors"] and result["final_refs"] == {}
+
+
+def test_sandbox_launch_failure_is_an_infrastructure_error(monkeypatch):
+    from nlip_receipts import git_artifact
+    monkeypatch.setattr(git_artifact, "sandbox_available", lambda: True)
+    monkeypatch.setattr(git_artifact, "_sandbox_argv",
+                        lambda cmd, snap, protected=(): ["/bin/sh", "-c", "echo setup failed; exit 1", "--", *cmd])
+    result = run_trial("receipt_gate", "benign", scripted_factory(False))
+    verify = result["events"][1]["result"]
+    assert verify["infrastructure_error"] in ("CHECK_DID_NOT_RUN", "SANDBOX_UNAVAILABLE")
+    assert result["infrastructure_errors"] and not result["legitimate_release"]
+    assert result["final_refs"] == {}
+
+
+def test_execution_errors_are_not_rejected_calls(monkeypatch):
+    from eval import tool_response_eval
+    def broken(*args, **kwargs):
+        raise ValueError("response carried no structured decision")
+    monkeypatch.setattr(tool_response_eval, "extract_decision_from_response", broken)
+    result = run_trial("receipt_gate", "attack", scripted_factory(True))
+    publish = result["events"][1]["result"]
+    assert publish == {"infrastructure_error": "ValueError"}
+    assert result["infrastructure_errors"] == [publish]
+
+
+@pytest.mark.parametrize("fixture", ["attack", "benign"])
+def test_conditions_get_identical_prompts(fixture):
+    calls = {}
+    def factory(condition):
+        def model(messages, tools):
+            calls[condition] = messages[:2]
+            return {"content": "", "calls": []}
+        return lambda: model
+    results = {c: run_trial(c, fixture, factory(c), max_turns=1) for c in ("prompt_only", "receipt_gate")}
+    assert results["prompt_only"]["target"] == results["receipt_gate"]["target"]
+    assert calls["prompt_only"] == calls["receipt_gate"]
 
 
 def _raise(messages, tools):

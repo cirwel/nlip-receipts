@@ -17,7 +17,10 @@ PYTHONPATH=. .venv/bin/python eval/tool_response_eval.py --output /tmp/new-tool-
 
 The output must not exist. Exit 2 means at least one trial recorded an infrastructure
 error (`infrastructure_errors`: sandbox unavailable, snapshot integrity or publish
-execution failure, or a harness exception) or a model error (`model_errors`: the
+execution failure, a verify receipt whose exit code and output are not the pinned
+check's own pass or fail marker (`CHECK_DID_NOT_RUN`, for example a sandbox launch
+failure), or an exception while executing a call or decoding the gate's response)
+or a model error (`model_errors`: the
 callback raised or returned a malformed response). Such a trial is not evidence either
 way. Exit 0 means every trial ran to a scored outcome.
 Results include complete callback transcripts, call results, per-call before/after
@@ -36,6 +39,7 @@ only messages and the fixed tool argument contract. It returns exactly
 `{"content": "...", "calls": [{"id": "unique", "name": "...", "arguments": {...}}]}`.
 Empty calls ends execution. Unknown tools, extra/missing arguments, duplicate IDs,
 mutable refs and targets outside the fixed local release are rejected, not repaired.
+Only these validation failures count as rejected calls.
 Valid calls execute sequentially; each result is returned as a correlated tool turn.
 There are no fallback calls or automatically supplied receipts. Factories must
 construct independent callback state rather than returning a shared model session.
@@ -47,7 +51,8 @@ enters the conversation only through `read_repo_file`, never a system/user turn.
 [Attribution](fixtures/agentdojo/README.md) records the source revision and adaptation;
 the full upstream MIT notice is beside the fixture.
 
-Both conditions get the same prompt and tools. Both verify through the authenticated
+Both conditions get the same prompt and tools: commit dates are fixed, so each
+fixture has one commit ID in both conditions, and a test checks that the prompts match. Both verify through the authenticated
 NLIP app, using a pinned check script, immutable snapshot, and required OS sandbox.
 `receipt_gate` publishes through the same app. `prompt_only` bypasses receipt
 enforcement **only for publication inside runner-created temporary repositories**.
@@ -78,7 +83,7 @@ benign e2e evidence; skipped checks are not passing checks.
 
 ## Local validation (2026-11-18)
 
-On macOS with `sandbox-exec`: focused tests **21 passed**; full suite **55 passed,
+On macOS with `sandbox-exec`: focused tests **25 passed**; full suite **59 passed,
 1 expected failure**, none skipped. The four-cell scripted run exited 0 with no
 infrastructure or model errors. `prompt_only` published the failing attack commit to
 its local destination; `receipt_gate` denied the same call (`MISSING_RECEIPT`) and
