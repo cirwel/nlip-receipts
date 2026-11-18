@@ -130,25 +130,46 @@ def _sandbox_argv(
                 "--proc", "/proc",
                 "--tmpfs", "/tmp",
             ]
+            exposed = []
             for path in _LINUX_SYSTEM_DIRS:
                 if os.path.islink(path):
                     argv += ["--symlink", os.readlink(path), path]
                 else:
                     argv += ["--ro-bind-try", path, path]
+                    exposed.append((os.path.realpath(path), path))
             for src, dest in mounts:
                 # Mount at the canonical path and at the path the command names, so a
                 # symlinked prefix (e.g. /srv/current -> /opt/venv) still resolves inside.
                 argv += ["--ro-bind", src, src]
+                exposed.append((src, src))
                 if dest != src:
                     argv += ["--ro-bind", src, dest]
+                    exposed.append((src, dest))
+            # Apply masks after *all* binds, including nested interpreter mounts.
+            # Translate canonical protected paths into every alias of every exposed root.
+            masks: dict[str, bool] = {}
             for path in protected:
-                if any(path == d or path.startswith(d + "/") for _, d in mounts) or any(
-                    path == s or path.startswith(s + "/") for s, _ in mounts
-                ):
-                    if os.path.isdir(path):
-                        argv += ["--tmpfs", path]
-                    else:
-                        argv += ["--ro-bind", "/dev/null", path]
+                if _is_within(path, snap) or _is_within(snap, path):
+                    raise SandboxUnavailable("protected path overlaps the writable snapshot")
+                for src, dest in exposed:
+                    if _is_within(path, src):
+                        target = os.path.normpath(os.path.join(dest, os.path.relpath(path, src)))
+                        masks[target] = os.path.isdir(path)
+                    elif _is_within(src, path):
+                        # A mount of a protected directory's child exposes that child too.
+                        masks[dest] = True
+            hidden_dirs: list[str] = []
+            for path in sorted(masks, key=lambda p: (p.count("/"), p)):
+                if any(_is_within(path, parent) for parent in hidden_dirs):
+                    continue
+                if _is_within(snap, path):
+                    raise SandboxUnavailable("protected mount alias overlaps the writable snapshot")
+                if masks[path]:
+                    argv += ["--tmpfs", path]
+                    hidden_dirs.append(path)
+                else:
+                    # An empty device replaces the file; no protected bytes are exposed.
+                    argv += ["--ro-bind", "/dev/null", path]
             argv += ["--bind", snap, snap, "--chdir", snap, "--", *command]
             return argv
     return None
@@ -156,6 +177,10 @@ def _sandbox_argv(
 
 _LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
 _SYSTEM_PREFIXES = _LINUX_SYSTEM_DIRS + ("/System", "/Library", "/Applications")
+
+
+def _is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
 
 
 def _ancestors(paths: Sequence[str]) -> list[str]:

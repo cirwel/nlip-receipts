@@ -500,7 +500,20 @@ class Type3ReceiptExtension:
             )
             return decision, receipt
 
-        # Operation == "publish"
+        # No other operation may reach receipt consumption or destination writes.
+        # `status` is reserved by the wire schema but is not implemented here.
+        if proposal.operation != "publish":
+            return Type3Decision(
+                action="deny",
+                reason_code="UNSUPPORTED_OPERATION",
+                sco_refs=["ECMA-434:7.2.2"],
+                message=f"[NLIP-SE Type-3] Unsupported operation: {proposal.operation!r}.",
+                operation=proposal.operation,
+                repo_id=proposal.repo_id,
+                caller_id=proposal.caller_id,
+                destination=proposal.destination,
+            ), None
+
         stored_receipt = self.ledger.get_receipt(proposal.receipt_id) if proposal.receipt_id else None
         hmac_valid = self.ledger.verify_receipt_hmac(stored_receipt) if stored_receipt else False
         latest_tree_rec = self.ledger.latest_receipt_for_tree(
