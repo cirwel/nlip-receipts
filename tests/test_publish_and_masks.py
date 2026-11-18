@@ -41,52 +41,78 @@ def test_status_cannot_publish_or_consume_valid_receipt(tmp_path, monkeypatch):
     assert e["ledger"].get_receipt(rec.receipt_id).consumed
 
 
-def _layout(tmp_path, monkeypatch):
+def _layout(tmp_path, monkeypatch, *, real_mounts=False):
+    """A prefix holding a protected file and repository, an unprotected nested interpreter
+    mount (`tools`), and symlink aliases for both. With `real_mounts`, the synthetic mounts are
+    appended to this interpreter's own mounts so a real Python can start in the sandbox."""
     root = tmp_path / "system"
     prefix = root / "venv"
     nested = prefix / "repository"
+    tools = prefix / "tools"
     nested.mkdir(parents=True)
+    tools.mkdir()
     secret = prefix / "ledger.db"
     secret.write_text("ledger secret")
     (nested / "private.txt").write_text("repo secret")
     (prefix / "visible.txt").write_text("visible")
+    (tools / "visible.txt").write_text("visible")
     alias = tmp_path / "alias"
     alias.symlink_to(prefix, target_is_directory=True)
-    child_alias = tmp_path / "child-alias"
-    child_alias.symlink_to(nested, target_is_directory=True)
+    tools_alias = tmp_path / "tools-alias"
+    tools_alias.symlink_to(tools, target_is_directory=True)
     snap = tmp_path / "snapshot"
     snap.mkdir()
-    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [
-        (str(prefix), str(alias)), (str(nested), str(child_alias)),
-    ])
-    return root, prefix, nested, secret, alias, child_alias, snap
+    synthetic = [(str(prefix), str(alias)), (str(tools), str(tools_alias))]
+    real = git_artifact._interpreter_mounts
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts",
+                        (lambda cmd: [*real(cmd), *synthetic]) if real_mounts else (lambda _: synthetic))
+    return root, prefix, nested, secret, alias, tools_alias, snap
+
+
+def _windows(argv, n):
+    return [argv[j:j + n] for j in range(len(argv))]
 
 
 @pytest.mark.parametrize("protected_alias", [False, True])
 def test_linux_masks_system_roots_and_all_interpreter_aliases(tmp_path, monkeypatch, protected_alias):
-    root, prefix, nested, secret, alias, child_alias, snap = _layout(tmp_path, monkeypatch)
+    root, prefix, nested, secret, alias, tools_alias, snap = _layout(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/bwrap")
     monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS", (str(root),))
-    protected = [alias / secret.name, child_alias] if protected_alias else [secret, nested]
+    protected = [alias / secret.name, alias / nested.name] if protected_alias else [secret, nested]
     argv = git_artifact._sandbox_argv(["/bin/true"], str(snap), [str(p) for p in protected])
     for path in (secret, alias / secret.name):
-        assert ["--ro-bind", "/dev/null", str(path)] in [argv[j:j+3] for j in range(len(argv))]
-    for path in (nested, alias / nested.name, child_alias):
-        assert ["--tmpfs", str(path)] in [argv[j:j+2] for j in range(len(argv))]
+        assert ["--ro-bind", "/dev/null", str(path)] in _windows(argv, 3)
+    for path in (nested, alias / nested.name):
+        assert ["--tmpfs", str(path)] in _windows(argv, 2)
+    assert ["--ro-bind", str(prefix / "tools"), str(tools_alias)] in _windows(argv, 3)
     last_exposure = max(j for j in range(len(argv)-2) if argv[j] == "--ro-bind" and argv[j+1] != "/dev/null")
-    assert all(argv.index(str(path), last_exposure + 3) > last_exposure for path in (secret, nested, child_alias))
+    assert all(argv.index(str(path), last_exposure + 3) > last_exposure for path in (secret, nested))
 
 
 def test_linux_system_root_masks_without_interpreter_mounts(tmp_path, monkeypatch):
-    root, prefix, nested, secret, alias, child_alias, snap = _layout(tmp_path, monkeypatch)
+    root, prefix, nested, secret, alias, tools_alias, snap = _layout(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/bwrap")
     monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS", (str(root),))
     monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [])
     argv = git_artifact._sandbox_argv(["/bin/true"], str(snap), [str(secret), str(nested)])
-    assert ["--ro-bind", "/dev/null", str(secret)] in [argv[j:j+3] for j in range(len(argv))]
-    assert ["--tmpfs", str(nested)] in [argv[j:j+2] for j in range(len(argv))]
+    assert ["--ro-bind", "/dev/null", str(secret)] in _windows(argv, 3)
+    assert ["--tmpfs", str(nested)] in _windows(argv, 2)
+
+
+def test_linux_missing_protected_path_under_exposed_root_is_refused(tmp_path, monkeypatch):
+    """A /dev/null bind needs a mount point, which bwrap cannot create inside a read-only bind."""
+    root, prefix, nested, secret, alias, tools_alias, snap = _layout(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/bwrap")
+    monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS", (str(root),))
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [])
+    with pytest.raises(SandboxUnavailable, match="does not exist"):
+        git_artifact._sandbox_argv(["/bin/true"], str(snap), [str(root / "missing-destination.git")])
+    # Outside every exposed root nothing is mounted, so nothing needs masking.
+    argv = git_artifact._sandbox_argv(["/bin/true"], str(snap), [str(tmp_path / "elsewhere.git")])
+    assert str(tmp_path / "elsewhere.git") not in argv
 
 
 @pytest.mark.parametrize("protect_parent", [False, True])
@@ -106,13 +132,16 @@ def test_linux_rejects_protected_snapshot_overlap(tmp_path, monkeypatch, protect
 def test_linux_masks_runtime(tmp_path, monkeypatch, interpreter_aliases):
     if not git_artifact.sandbox_available():
         pytest.skip("bubblewrap cannot start namespaces on this host")
-    root, prefix, nested, secret, alias, child_alias, snap = _layout(tmp_path, monkeypatch)
+    # Keep this interpreter's own mounts in both variants, so Python starts wherever it is
+    # installed; only the alias variant adds the synthetic mounts.
+    real_mounts = git_artifact._interpreter_mounts
+    root, prefix, nested, secret, alias, tools_alias, snap = _layout(tmp_path, monkeypatch, real_mounts=True)
     monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS", (*git_artifact._LINUX_SYSTEM_DIRS, str(root)))
     if not interpreter_aliases:
-        monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [])
-    prefixes = (prefix, alias) if interpreter_aliases else (prefix,)
+        monkeypatch.setattr(git_artifact, "_interpreter_mounts", real_mounts)
+    prefixes = (prefix, alias, tools_alias) if interpreter_aliases else (prefix,)
     secrets = (secret, alias / secret.name) if interpreter_aliases else (secret,)
-    repos = (nested, alias / nested.name, child_alias) if interpreter_aliases else (nested,)
+    repos = (nested, alias / nested.name) if interpreter_aliases else (nested,)
     script = "\n".join([
         "from pathlib import Path",
         "def assert_masked(path):",
@@ -213,6 +242,62 @@ def test_interpreter_inside_protected_directory_is_refused(tmp_path, monkeypatch
         monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/sandbox")
         with pytest.raises(SandboxUnavailable, match="inside a protected path"):
             git_artifact._sandbox_argv(["/bin/true"], str(snap), ext._protected_paths())
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_interpreter_equal_to_protected_directory_is_refused(tmp_path, monkeypatch, platform):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/sandbox")
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [(str(repo), str(repo))])
+    with pytest.raises(SandboxUnavailable, match="inside a protected path"):
+        git_artifact._sandbox_argv(["/bin/true"], str(snap), [str(repo)])
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_verify_executable_inside_protected_directory_is_refused(tmp_path, monkeypatch, platform):
+    """`_interpreter_mounts` skips system roots, so the executable itself is checked as well."""
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path)
+    exe = state / "venv" / "bin" / "python"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/sandbox")
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [])
+    with pytest.raises(SandboxUnavailable, match="inside a protected path"):
+        git_artifact._sandbox_argv([str(exe), "-c", "pass"], str(snap), ext._protected_paths())
+
+
+def test_sandbox_setup_failure_does_not_supersede_a_pass(tmp_path, monkeypatch):
+    """If this run's sandbox cannot start the command, verify issues no receipt."""
+    if not git_artifact.sandbox_available():
+        pytest.skip("no working OS sandbox on this host")
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path)
+    dec, passed = ext.handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED", dec.message
+    # A wrapper that starts but cannot set up the sandbox exits non-zero before the command runs.
+    monkeypatch.setattr(git_artifact, "sandbox_available", lambda: True)
+    monkeypatch.setattr(git_artifact, "_sandbox_argv",
+                        lambda cmd, snap, protected=(): ["/bin/sh", "-c", "exit 1", "--", *cmd])
+    dec, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert (dec.reason_code, rec) == ("SANDBOX_UNAVAILABLE", None)
+    latest = ledger.latest_receipt_for_tree("svc", passed.tree_oid, "p", "prod")
+    assert latest.receipt_id == passed.receipt_id and latest.status == "passed"
+
+
+def test_missing_verify_executable_issues_no_receipt(tmp_path):
+    if not git_artifact.sandbox_available():
+        pytest.skip("no working OS sandbox on this host")
+    e, root, state, ledger, ext = _ledger_under_exposed_root(
+        tmp_path, [str(tmp_path / "no-such-interpreter"), "test_ok.py"])
+    dec, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert (dec.reason_code, rec) == ("SANDBOX_UNAVAILABLE", None)
 
 
 def test_refused_sandbox_does_not_supersede_a_pass(tmp_path, monkeypatch):
