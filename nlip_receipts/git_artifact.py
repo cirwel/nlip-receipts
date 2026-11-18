@@ -88,11 +88,23 @@ def _sandbox_argv(
 
     `protected_paths` (the ledger, source repositories, destinations) stay unreadable even when
     they sit inside an exposed interpreter prefix. Raises SandboxUnavailable if an interpreter
-    prefix is too broad to expose (a home directory or a top-level directory).
+    prefix is too broad to expose (a home directory or a top-level directory), or if a protected
+    path overlaps the snapshot or contains an interpreter prefix.
     """
     snap = os.path.realpath(snap_dir)
     mounts = _interpreter_mounts(command)
     protected = sorted({os.path.realpath(p) for p in protected_paths if p})
+    for path in protected:
+        if _is_within(path, snap) or _is_within(snap, path):
+            raise SandboxUnavailable("protected path overlaps the writable snapshot")
+        # Hiding a protected directory would also hide an interpreter installed under it, and
+        # the run would fail as if the tree were bad. Refuse to run instead.
+        for prefix in {p for mount in mounts for p in mount}:
+            if prefix != path and _is_within(prefix, path):
+                raise SandboxUnavailable(
+                    f"interpreter prefix {prefix!r} lies inside a protected path; "
+                    "move the interpreter or the ledger, repository or destination"
+                )
     if sys.platform == "darwin":
         exe = shutil.which("sandbox-exec")
         if exe:
@@ -149,8 +161,6 @@ def _sandbox_argv(
             # Translate canonical protected paths into every alias of every exposed root.
             masks: dict[str, bool] = {}
             for path in protected:
-                if _is_within(path, snap) or _is_within(snap, path):
-                    raise SandboxUnavailable("protected path overlaps the writable snapshot")
                 for src, dest in exposed:
                     if _is_within(path, src):
                         target = os.path.normpath(os.path.join(dest, os.path.relpath(path, src)))

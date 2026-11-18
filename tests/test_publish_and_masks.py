@@ -130,3 +130,133 @@ def test_linux_masks_runtime(tmp_path, monkeypatch, interpreter_aliases):
     result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "masked"
+
+
+def _ledger_under_exposed_root(tmp_path, command=None):
+    """Repositories under `tmp_path/repos`, the ledger alone in `tmp_path/system/state`."""
+    from nlip_receipts import ReceiptLedger, Type3ReceiptExtension
+    from test_verify_isolation import SECRETS
+
+    (tmp_path / "repos").mkdir()
+    e = _env(tmp_path / "repos")
+    root = tmp_path / "system"
+    state = root / "state"
+    ledger = ReceiptLedger(state / "ledger.db")
+    (root / "visible.txt").write_text("visible")
+    for caller, secret in SECRETS.items():
+        ledger.register_caller_secret(caller, secret)
+    ledger.set_policy(repo_id="svc", destination="prod", profile_id="p",
+                      command=command or [sys.executable, "test_ok.py"], allowed_callers=list(SECRETS))
+    ext = gate.Type3ReceiptExtension(ledger=ledger, repos={"svc": str(e["work"])},
+                                     destinations={"prod": str(e["prod"])})
+    return e, root, state, ledger, ext
+
+
+def test_ledger_directory_is_protected():
+    """SQLite sidecar files are covered by the ledger's directory, not named one by one."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from nlip_receipts import ReceiptLedger
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = ReceiptLedger(Path(tmp) / "state" / "ledger.db")
+        ext = gate.Type3ReceiptExtension(ledger=ledger, repos={}, destinations={})
+        paths = ext._protected_paths()
+        state = os.path.realpath(os.path.join(tmp, "state"))
+        assert state in paths
+        assert not any(p.endswith(("-wal", "-shm", "-journal")) for p in paths)
+
+
+def test_linux_argv_hides_ledger_directory_inside_exposed_root(tmp_path, monkeypatch):
+    """With the real protected set, a ledger under an exposed root is hidden by a tmpfs over its
+    directory. No /dev/null bind may target a path that does not exist: bwrap cannot create a
+    mount point inside a read-only bind and the verify would fail."""
+    import os
+
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path)
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/bwrap")
+    monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS", (str(root),))
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [])
+    argv = git_artifact._sandbox_argv(["/bin/true"], str(snap), ext._protected_paths())
+    windows = [argv[j:j + 2] for j in range(len(argv))]
+    assert ["--tmpfs", os.path.realpath(state)] in windows
+    assert argv.index(os.path.realpath(state)) > argv.index(str(root))  # mask after the bind
+    dev_null_targets = [argv[j + 2] for j in range(len(argv) - 2) if argv[j:j + 2] == ["--ro-bind", "/dev/null"]]
+    assert all(os.path.exists(p) for p in dev_null_targets)
+    assert not any(a.endswith(("-wal", "-shm", "-journal")) for a in argv)
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_interpreter_inside_protected_directory_is_refused(tmp_path, monkeypatch, alias):
+    """Masking the ledger directory would hide an interpreter installed under it, and the run
+    would fail as though the tree were bad. The sandbox refuses instead."""
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path)
+    venv = tmp_path / "venv"
+    venv.mkdir()
+    inside = state / "venv"
+    if alias:
+        inside.symlink_to(venv, target_is_directory=True)
+        mount = (str(venv), str(inside))
+    else:
+        inside.mkdir()
+        mount = (str(inside), str(inside))
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts", lambda _: [mount])
+    for platform in ("linux", "darwin"):
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/sandbox")
+        with pytest.raises(SandboxUnavailable, match="inside a protected path"):
+            git_artifact._sandbox_argv(["/bin/true"], str(snap), ext._protected_paths())
+
+
+def test_refused_sandbox_does_not_supersede_a_pass(tmp_path, monkeypatch):
+    if not git_artifact.sandbox_available():
+        pytest.skip("no working OS sandbox on this host")
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path)
+    dec, passed = ext.handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED", dec.message
+    inside = state / "venv"
+    inside.mkdir()
+    real_mounts = git_artifact._interpreter_mounts
+    monkeypatch.setattr(git_artifact, "_interpreter_mounts",
+                        lambda cmd: [*real_mounts(cmd), (str(inside), str(inside))])
+    dec, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert (dec.reason_code, rec) == ("SANDBOX_UNAVAILABLE", None)
+    latest = ledger.latest_receipt_for_tree("svc", passed.tree_oid, "p", "prod")
+    assert latest.receipt_id == passed.receipt_id and latest.status == "passed"
+
+
+def test_verify_passes_with_ledger_under_exposed_root(tmp_path, monkeypatch):
+    """Runtime check with the real protected set. On Linux the ledger directory sits under an
+    exposed root; before the directory mask, bwrap aborted on the missing `-journal` file and the
+    verify recorded a failed receipt."""
+    if not git_artifact.sandbox_available():
+        pytest.skip("no working OS sandbox on this host")
+    ledger_path = tmp_path / "system" / "state" / "ledger.db"
+    script = "\n".join([
+        "import os, sys",
+        "from pathlib import Path",
+        "try:",
+        f"    data = Path({str(ledger_path)!r}).read_bytes()",
+        "except OSError:",
+        "    data = b''",
+        "if data: sys.exit(3)",
+        "try:",
+        f"    names = os.listdir({str(ledger_path.parent)!r})",
+        "except OSError:",
+        "    names = []",
+        "if names: sys.exit(4)",
+        "if sys.platform.startswith('linux'):",
+        f"    sys.exit(0 if Path({str(tmp_path / 'system' / 'visible.txt')!r}).read_text() == 'visible' else 5)",
+    ])
+    monkeypatch.setattr(git_artifact, "_LINUX_SYSTEM_DIRS",
+                        (*git_artifact._LINUX_SYSTEM_DIRS, str(tmp_path / "system")))
+    e, root, state, ledger, ext = _ledger_under_exposed_root(tmp_path, [sys.executable, "-c", script])
+    dec, rec = ext.handle_proposal(_prop("verify", "alice"))
+    assert dec.reason_code == "VERIFICATION_PASSED", (dec.message, rec and rec.exit_code)
