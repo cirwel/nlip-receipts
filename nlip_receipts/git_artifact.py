@@ -3,10 +3,10 @@
 Builds on the content-addressed repository fingerprinting concepts from `hermes-receipts`,
 extending them with:
 - `--no-replace-objects`, `GIT_CONFIG_NOSYSTEM=1`, and `GIT_CONFIG_GLOBAL=/dev/null`
-- Snapshot-isolated verification (`git archive --worktree-attributes <tree_oid>`) with full
+- Snapshot-isolated verification (`git archive --format=tar <tree_oid>`) with full
   manifest verification against `git ls-tree -r <tree_oid>` (blocking `.gitattributes`
   `export-ignore` / `export-subst` and submodule gitlink attacks)
-- Optional policy-pinned test file digest verification (blocking adaptive test-tampering attacks)
+- Optional policy-pinned test file digest verification before execution (not runtime immutability)
 - Commit-pinned publication (`git push --no-verify --no-follow-tags -- <dest> <commit_oid>:refs/heads/<branch>`)
 """
 
