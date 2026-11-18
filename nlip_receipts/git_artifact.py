@@ -88,11 +88,31 @@ def _sandbox_argv(
 
     `protected_paths` (the ledger, source repositories, destinations) stay unreadable even when
     they sit inside an exposed interpreter prefix. Raises SandboxUnavailable if an interpreter
-    prefix is too broad to expose (a home directory or a top-level directory).
+    prefix is too broad to expose (a home directory or a top-level directory), if a protected
+    path overlaps the snapshot or contains the interpreter or the verify executable, or (Linux)
+    if a protected path that must be masked does not exist.
     """
     snap = os.path.realpath(snap_dir)
     mounts = _interpreter_mounts(command)
     protected = sorted({os.path.realpath(p) for p in protected_paths if p})
+    # Hiding a protected path would also hide an interpreter or executable installed under it,
+    # and the run would fail as if the tree were bad. Refuse to run instead.
+    needed = {p for mount in mounts for p in mount}
+    if command and os.path.isabs(command[0]):
+        needed |= {os.path.abspath(command[0]), os.path.realpath(command[0])}
+    elif command and "/" not in command[0]:
+        resolved = shutil.which(command[0])
+        if resolved:
+            needed |= {os.path.abspath(resolved), os.path.realpath(resolved)}
+    for path in protected:
+        if _is_within(path, snap) or _is_within(snap, path):
+            raise SandboxUnavailable("protected path overlaps the writable snapshot")
+        for prefix in sorted(needed):
+            if _is_within(prefix, path):
+                raise SandboxUnavailable(
+                    f"interpreter or executable {prefix!r} lies inside a protected path; "
+                    "move it or the ledger, repository or destination"
+                )
     if sys.platform == "darwin":
         exe = shutil.which("sandbox-exec")
         if exe:
@@ -130,25 +150,50 @@ def _sandbox_argv(
                 "--proc", "/proc",
                 "--tmpfs", "/tmp",
             ]
+            exposed = []
             for path in _LINUX_SYSTEM_DIRS:
                 if os.path.islink(path):
                     argv += ["--symlink", os.readlink(path), path]
                 else:
                     argv += ["--ro-bind-try", path, path]
+                    exposed.append((os.path.realpath(path), path))
             for src, dest in mounts:
                 # Mount at the canonical path and at the path the command names, so a
                 # symlinked prefix (e.g. /srv/current -> /opt/venv) still resolves inside.
                 argv += ["--ro-bind", src, src]
+                exposed.append((src, src))
                 if dest != src:
                     argv += ["--ro-bind", src, dest]
+                    exposed.append((src, dest))
+            # Apply masks after *all* binds, including nested interpreter mounts.
+            # Translate canonical protected paths into every alias of every exposed root.
+            masks: dict[str, bool] = {}
             for path in protected:
-                if any(path == d or path.startswith(d + "/") for _, d in mounts) or any(
-                    path == s or path.startswith(s + "/") for s, _ in mounts
-                ):
-                    if os.path.isdir(path):
-                        argv += ["--tmpfs", path]
-                    else:
-                        argv += ["--ro-bind", "/dev/null", path]
+                for src, dest in exposed:
+                    if _is_within(path, src):
+                        if not os.path.lexists(path):
+                            # bwrap cannot create a mount point inside a read-only bind, so the
+                            # launch would abort and look like a failed check.
+                            raise SandboxUnavailable(
+                                f"protected path {path!r} does not exist under exposed root {src!r}"
+                            )
+                        target = os.path.normpath(os.path.join(dest, os.path.relpath(path, src)))
+                        masks[target] = os.path.isdir(path)
+                    elif _is_within(src, path):
+                        # A mount of a protected directory's child exposes that child too.
+                        masks[dest] = True
+            hidden_dirs: list[str] = []
+            for path in sorted(masks, key=lambda p: (p.count("/"), p)):
+                if any(_is_within(path, parent) for parent in hidden_dirs):
+                    continue
+                if _is_within(snap, path):
+                    raise SandboxUnavailable("protected mount alias overlaps the writable snapshot")
+                if masks[path]:
+                    argv += ["--tmpfs", path]
+                    hidden_dirs.append(path)
+                else:
+                    # An empty device replaces the file; no protected bytes are exposed.
+                    argv += ["--ro-bind", "/dev/null", path]
             argv += ["--bind", snap, snap, "--chdir", snap, "--", *command]
             return argv
     return None
@@ -156,6 +201,10 @@ def _sandbox_argv(
 
 _LINUX_SYSTEM_DIRS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
 _SYSTEM_PREFIXES = _LINUX_SYSTEM_DIRS + ("/System", "/Library", "/Applications")
+
+
+def _is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
 
 
 def _ancestors(paths: Sequence[str]) -> list[str]:
@@ -469,6 +518,30 @@ def compute_env_fingerprint(
     return command_sha256, env_fingerprint
 
 
+_PROBE_SCRIPT = 'case "$1" in */*) test -x "$1" ;; *) command -v "$1" >/dev/null ;; esac'
+
+
+def _probe_wrapped(sandbox_prefix: list[str], executable: str, cwd: str, env: dict[str, str]) -> None:
+    """Start this run's exact sandbox configuration with a no-op that only finds `executable`.
+
+    The generic probe in `sandbox_available` does not use the run's mounts and masks. Without
+    this check, a sandbox that cannot be set up for this run, or cannot see the executable, would
+    exit non-zero and be recorded as a failed check that supersedes an earlier pass.
+    """
+    probe = [*sandbox_prefix, "/bin/sh", "-c", _PROBE_SCRIPT, "sh", executable]
+    try:
+        proc = subprocess.run(probe, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10.0)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SandboxUnavailable(f"sandbox setup probe failed: {exc}") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-1:]
+        raise SandboxUnavailable(
+            "sandbox could not start the verify command for this run"
+            + (f": {detail[0][:200]}" if detail else "")
+        )
+
+
 def run_verification_in_snapshot(
     repo_path: str,
     tree_oid: str,
@@ -483,7 +556,8 @@ def run_verification_in_snapshot(
 
     With `sandbox="required"` (the default) the command runs under the host OS sandbox
     (`sandbox-exec` on macOS, `bwrap` on Linux) with no network and no filesystem writes outside
-    the snapshot; if no working sandbox exists, `SandboxUnavailable` is raised (fail closed).
+    the snapshot. If no working sandbox exists, or this run's sandbox cannot start the command,
+    `SandboxUnavailable` is raised (fail closed) and no receipt is issued.
     `sandbox="off"` runs the untrusted tree with the SE's own privileges and is only safe when the
     caller provides equivalent isolation itself.
 
@@ -523,6 +597,7 @@ def run_verification_in_snapshot(
             wrapped = _sandbox_argv(command, snap_dir, protected_paths)
             if wrapped is None:
                 raise SandboxUnavailable("OS sandbox backend disappeared after probe")
+            _probe_wrapped(wrapped[: len(wrapped) - len(command)], command[0], snap_real, clean_env)
             argv = wrapped
         t0 = time.perf_counter()
         try:

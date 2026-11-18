@@ -229,7 +229,7 @@ def test_protected_paths_stay_hidden_inside_an_exposed_prefix(host_dir):
     ext = Type3ReceiptExtension(ledger=e["ledger"], repos={"svc": str(e["work"])}, destinations={"prod": str(e["prod"])})
     ext._protected_paths = lambda: [str(secret)]  # type: ignore[method-assign]
     script = (
-        f"import sys\ntry:\n    sys.exit(ord(open({str(secret)!r}).read(1)))\nexcept OSError:\n    pass\n"
+        f"import sys\ntry:\n    data = open({str(secret)!r}).read(1)\n    if data: sys.exit(ord(data))\nexcept OSError:\n    pass\n"
         f"sys.exit(ord(open({str(prefix / 'visible.txt')!r}).read(1)))\n"
     )
     e["ledger"].set_policy(repo_id="svc", destination="prod", profile_id="p",
