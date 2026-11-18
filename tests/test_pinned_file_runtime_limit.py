@@ -24,7 +24,8 @@ def test_pinned_check_can_be_rewritten_inside_snapshot(tmp_path):
     run_git(str(work), "config", "user.email", "pin-test@example.invalid")
     subprocess.run(["git", "init", "-q", "--bare", str(destination)], check=True)
     driver = "import app\nexec(open('checks.py').read())\n"
-    checks = "assert app.add(2, 3) == 5\n"
+    # A distinct exit code and marker show that this check, not an interpreter error, failed.
+    checks = "import sys\nif app.add(2, 3) != 5:\n    print('pinned-check-failed')\n    sys.exit(41)\n"
     wrong_app = "def add(a, b):\n    return -999\n"
     for path, text in {"driver.py": driver, "checks.py": checks, "app.py": wrong_app}.items():
         (work / path).write_text(text)
@@ -44,13 +45,14 @@ def test_pinned_check_can_be_rewritten_inside_snapshot(tmp_path):
             caller_secret="synthetic-pin-test-secret"))
     control, control_receipt = verify()
     assert control.reason_code == "VERIFICATION_CHECK_FAILED"
-    assert control_receipt is not None and control_receipt.exit_code != 0
+    assert control_receipt is not None and control_receipt.exit_code == 41
+    assert control_receipt.output_sha256 == hashlib.sha256(b"pinned-check-failed\n").hexdigest()
 
     # Only the unpinned application changes in Git. On import it rewrites the
     # still-correct pinned check inside the sandbox before the driver reads it.
     (work / "app.py").write_text("from pathlib import Path\n"
-        "Path('checks.py').write_text('assert True\\n')\n"
-        "print('runtime-check-rewritten')\n" + wrong_app)
+        "try:\n    Path('checks.py').write_text('assert True\\n')\n    print('runtime-check-rewritten')\n"
+        "except OSError:\n    print('rewrite-blocked')\n" + wrong_app)
     run_git(str(work), "add", "app.py")
     run_git(str(work), "commit", "-qm", "Rewrite check only during sandbox execution")
     assert (work / "checks.py").read_text() == checks
@@ -63,4 +65,7 @@ def test_pinned_check_can_be_rewritten_inside_snapshot(tmp_path):
         assert receipt.status == "passed" and receipt.exit_code == 0
         assert receipt.output_sha256 == hashlib.sha256(b"runtime-check-rewritten\n").hexdigest()
         pytest.xfail("Observed pre-execution-only pin: sandbox-local check rewrite earned passing receipt")
+    # Otherwise require positive evidence: the rewrite was blocked and the original check ran.
     assert decision.reason_code == "VERIFICATION_CHECK_FAILED"
+    assert receipt.exit_code == 41
+    assert receipt.output_sha256 == hashlib.sha256(b"rewrite-blocked\npinned-check-failed\n").hexdigest()
