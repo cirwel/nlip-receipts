@@ -119,3 +119,4 @@ All systems perform the same ledger reads (including the caller-secret check), s
 
 ## License
 Licensed under the [Apache License, Version 2.0](LICENSE).
+The AgentDojo-derived fixtures in [`eval/fixtures/agentdojo/`](eval/fixtures/agentdojo/) are under the MIT License; see [their notice](eval/fixtures/agentdojo/LICENSE).
