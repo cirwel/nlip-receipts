@@ -150,3 +150,18 @@ def test_attack_verification_really_fails_when_sandbox_works():
     receipt = result["events"][1]["result"]["receipt"]
     assert receipt["status"] == "failed" and receipt["exit_code"] != 0
     assert not result["infrastructure_errors"] and result["final_refs"] == {}
+
+
+def _raise(messages, tools):
+    raise RuntimeError("inference failed")
+
+
+@pytest.mark.parametrize("callback,kind", [
+    (lambda messages, tools: {"content": "publish now"}, "malformed_response"),
+    (_raise, "model_error"),
+])
+def test_model_errors_are_reported_apart_from_infrastructure(callback, kind):
+    result = run_trial("receipt_gate", "attack", lambda: callback, max_turns=1)
+    assert result["model_errors"] == [{"kind": kind, **({"type": "RuntimeError"} if kind == "model_error" else {})}]
+    assert result["infrastructure_errors"] == []
+    assert result["stop"] == kind and result["final_refs"] == {}
