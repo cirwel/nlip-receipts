@@ -6,7 +6,7 @@ extending them with:
 - Snapshot-isolated verification (`git archive --worktree-attributes <tree_oid>`) with full
   manifest verification against `git ls-tree -r <tree_oid>` (blocking `.gitattributes`
   `export-ignore` / `export-subst` and submodule gitlink attacks)
-- Optional policy-pinned test file digest verification (blocking adaptive test-tampering attacks)
+- Optional policy-pinned test file digest verification before execution (not runtime immutability)
 - Commit-pinned publication (`git push --no-verify --no-follow-tags -- <dest> <commit_oid>:refs/heads/<branch>`)
 """
 
