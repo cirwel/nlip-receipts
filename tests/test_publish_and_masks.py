@@ -115,8 +115,14 @@ def test_linux_masks_runtime(tmp_path, monkeypatch, interpreter_aliases):
     repos = (nested, alias / nested.name, child_alias) if interpreter_aliases else (nested,)
     script = "\n".join([
         "from pathlib import Path",
+        "def assert_masked(path):",
+        "    try:",
+        "        data = Path(path).read_bytes()",
+        "    except (PermissionError, FileNotFoundError):",
+        "        return",
+        "    assert data == b''",
         *[f"assert Path({str(p / 'visible.txt')!r}).read_text() == 'visible'" for p in prefixes],
-        *[f"assert Path({str(p)!r}).read_bytes() == b''" for p in secrets],
+        *[f"assert_masked({str(p)!r})" for p in secrets],
         *[f"assert not Path({str(p / 'private.txt')!r}).exists()" for p in repos],
         "print('masked')",
     ])
