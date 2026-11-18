@@ -65,8 +65,9 @@ make setup
 
 ### Run Unit & Integration Tests (`make test`)
 ```bash
-make test   # 31 tests + 1 expected failure (documented limitation): HTTP, TOCTOU, Confused-Deputy, cross-destination,
-            # duplicate auth, 8-thread race, adapter shapes, verify sandbox isolation, caller auth, branch allowlist
+make test   # pytest suite: HTTP, TOCTOU, Confused-Deputy, cross-destination, duplicate auth, 8-thread race,
+            # adapter shapes, verify sandbox isolation, caller auth, branch allowlist. Tests marked xfail
+            # record limitations documented in SECURITY.md.
 ```
 
 ### Run End-to-End Interactive Demo (`make demo`)
