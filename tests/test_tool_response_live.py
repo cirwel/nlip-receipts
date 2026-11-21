@@ -3,8 +3,11 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
+import tool_response_live as live  # noqa: E402
 from tool_response_eval import TOOLS  # noqa: E402
 from tool_response_live import from_chat, to_chat, tool_schemas  # noqa: E402
 
@@ -41,3 +44,32 @@ def test_reply_conversion_does_not_repair_calls():
     assert env["calls"][0]["arguments"] == {"__unparsed_arguments__": "{not json"}
     assert env["calls"][1]["id"] == ""  # missing id stays missing; the harness rejects it
     assert from_chat({"content": "done"}) == {"content": "done", "calls": []}
+
+
+@pytest.mark.parametrize(("options", "conditions"), [
+    ([], ["prompt_only", "receipt_gate"]),
+    (["--condition", "no_gate"], ["no_gate"]),
+])
+def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions):
+    output = tmp_path / "run.json"
+    monkeypatch.setattr(sys, "argv", ["live", "--model", "stub", "--seeds", "1", "--output", str(output), *options])
+    monkeypatch.setattr(live, "sandbox_available", lambda: True)
+    monkeypatch.setattr(live, "model_info", lambda model: {"model": model})
+    def no_calls(messages, tools):
+        return {"content": "", "calls": []}
+    monkeypatch.setattr(live, "ollama_factory", lambda *a, **kw: lambda: no_calls)
+    assert live.main() == 0
+    report = json.loads(output.read_text())
+    expected = [(c, f, 1) for c in conditions for f in ("attack", "benign")]
+    for rows in (report["runs"], report["summary"]):
+        assert [(r["condition"], r["fixture"], r["seed"]) for r in rows] == expected
+
+
+def test_live_aborts_before_inference_without_a_sandbox(tmp_path, monkeypatch):
+    output = tmp_path / "run.json"
+    monkeypatch.setattr(sys, "argv", ["live", "--model", "stub", "--condition", "no_gate", "--output", str(output)])
+    monkeypatch.setattr(live, "sandbox_available", lambda: False)
+    monkeypatch.setattr(live, "model_info", lambda _: pytest.fail("contacted Ollama"))
+    with pytest.raises(SystemExit, match="working verification sandbox"):
+        live.main()
+    assert not output.exists()
