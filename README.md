@@ -78,13 +78,13 @@ make demo
 ### Reproduce Full Evaluation Benchmark & Ablations (`make eval`)
 ```bash
 make eval
-PYTHONPATH=. .venv/bin/python eval/live_agent_eval.py   # Optional: live LLM IPI evaluation (requires local Ollama)
+PYTHONPATH=. .venv/bin/python eval/tool_response_live.py --model gemma4:latest --output new-run.json   # Optional: live models (local Ollama)
 ```
 `make eval` runs two harnesses:
 - [`eval/benchmark.py`](eval/benchmark.py) → [`evaluation_report.md`](eval/results/evaluation_report.md) / [`evaluation_summary.json`](eval/results/evaluation_summary.json): a decision-function ablation over seeded ledger states.
 - [`eval/e2e_attacks.py`](eval/e2e_attacks.py) → [`e2e_attack_report.md`](eval/results/e2e_attack_report.md) / [`e2e_attack_summary.json`](eval/results/e2e_attack_summary.json): the end-to-end attack suite.
 
-The optional live LLM run writes [`eval/results/live_agent_traces.json`](eval/results/live_agent_traces.json).
+Live-model evaluation is separate and needs local Ollama models: [`eval/tool_response_live.py`](eval/tool_response_live.py) runs the tool-response harness ([`eval/TOOL_RESPONSE_EVAL.md`](eval/TOOL_RESPONSE_EVAL.md)) with real models. On 2026-11-20, with an injected release note read through a tool, a prompt-only defense let the failing commit reach the destination in 6/10 trials and the receipt gate in 0/10; benign releases completed 20/20 ([`eval/results/tool_response_live_2026-11-20.json`](eval/results/tool_response_live_2026-11-20.json)). The older exploratory probe [`eval/live_agent_eval.py`](eval/live_agent_eval.py) put the injection in the user turn and is superseded.
 
 ---
 
