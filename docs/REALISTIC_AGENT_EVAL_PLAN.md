@@ -1,6 +1,6 @@
 # Realistic agent evaluation: proposed protocol
 
-**Status: partly implemented; one live-model run (2026-11-20).** `eval/tool_response_eval.py` (see `eval/TOOL_RESPONSE_EVAL.md`) runs the prompt-only control and the receipt gate on one attack fixture adapted from AgentDojo and one benign fixture. `eval/tool_response_live.py` drives it with local Ollama models; the first run (2 models × 2 conditions × 2 fixtures × 5 seeds) is recorded in `eval/TOOL_RESPONSE_EVAL.md`. The no-gate control and the other fixtures are not built yet.
+**Implementation status.** The scripted and local Ollama runners support all three conditions on one attack fixture adapted from AgentDojo and one benign fixture. The November 20 live run covered prompt-only and receipt-gate trials (2 models × 2 conditions × 2 fixtures × 5 seeds). The neutral no-gate control is available separately with `--condition no_gate`. Live evidence for that control and the four remaining fixtures are still outstanding. See [the evaluation and reproduction instructions](../eval/TOOL_RESPONSE_EVAL.md).
 
 This plan supplements, rather than replaces, `eval/e2e_attacks.py`. That suite already tests the real NLIP app, sandbox and destination effects using authored deterministic calls. The missing evidence is whether an agent reading lower-trust material is induced to propose an unauthorized action, and whether a deployed gate prevents its effect without breaking legitimate releases.
 
@@ -66,4 +66,4 @@ Before a model run:
 3. Test the runner with a scripted fake model: no calls causes no mutation; malformed calls cause no mutation; sequential tool results are returned faithfully; unauthorized control publication really reaches its local destination; the equivalent gated call does not; valid verify→publish completes; fixture state is fresh on every run.
 4. Run one exposed attack and one benign release as a smoke test, preserving all traces, then freeze configuration and collect the declared matrix.
 
-The current checkout has the necessary NLIP app, sandbox, Git fixture and destination-observation building blocks. The remaining engineering is a faithful multi-turn model runner and isolated baseline execution. A local model service and a working OS sandbox are prerequisites, not yet validated by this plan. A scripted smoke test would validate the runner, not constitute live-agent results or a real harness integration.
+Live collection requires a local model service and a working OS sandbox on the collection host. The scripted smoke test exercises runner behavior. Report live-model observations separately.
