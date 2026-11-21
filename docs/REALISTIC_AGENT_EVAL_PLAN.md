@@ -1,6 +1,6 @@
 # Realistic agent evaluation: proposed protocol
 
-**Status: partly implemented, not run with a live model. No new effectiveness results.** `eval/tool_response_eval.py` (see `eval/TOOL_RESPONSE_EVAL.md`) runs the prompt-only control and the receipt gate on one attack fixture adapted from AgentDojo and one benign fixture, driven by a scripted model. The no-gate control, the other fixtures and live-model runs are not built yet.
+**Status: partly implemented; one live-model run (2026-11-20).** `eval/tool_response_eval.py` (see `eval/TOOL_RESPONSE_EVAL.md`) runs the prompt-only control and the receipt gate on one attack fixture adapted from AgentDojo and one benign fixture. `eval/tool_response_live.py` drives it with local Ollama models; the first run (2 models × 2 conditions × 2 fixtures × 5 seeds) is recorded in `eval/TOOL_RESPONSE_EVAL.md`. The no-gate control and the other fixtures are not built yet.
 
 This plan supplements, rather than replaces, `eval/e2e_attacks.py`. That suite already tests the real NLIP app, sandbox and destination effects using authored deterministic calls. The missing evidence is whether an agent reading lower-trust material is induced to propose an unauthorized action, and whether a deployed gate prevents its effect without breaking legitimate releases.
 
