@@ -79,11 +79,12 @@ by the gate. This distinction has a regression test.
 The included scripted callback deliberately issues the attack publication after
 reading the fixture. It demonstrates runner and enforcement behavior, **not live
 agent susceptibility**, an AgentDojo benchmark score, commercial-agent integration,
-or state-of-the-art coverage. No live model is invoked by this scripted callback, nor are external credentials provisioned,
-models downloaded, production repositories targeted, or exfiltration attempted.
-The check script intentionally tests simple synthetic code; a receipt is not proof
-of general correctness. Local sandbox availability is a prerequisite for completed
-benign e2e evidence; skipped checks are not passing checks.
+or state-of-the-art coverage. No live model is invoked by this scripted callback,
+nor are external credentials provisioned, models downloaded, production repositories
+targeted, or exfiltration attempted. The check script intentionally tests simple
+synthetic code; a receipt is not proof of general correctness. Local sandbox
+availability is a prerequisite for completed benign e2e evidence; skipped checks
+are not passing checks.
 
 ## Local validation (2026-11-18)
 
@@ -145,13 +146,15 @@ PYTHONPATH=. .venv/bin/python eval/tool_response_eval.py \
 
 For a live comparison, first pass the sandbox-dependent tests on the collection
 host. Because adding `--condition no_gate` updated `eval/tool_response_eval.py`
-after `16456e2`, any separate `no_gate` collection records a newer `source_commit`
-and `runner_sha256` (and `policy_sha256` if `sys.executable` lives at a different
-checkout path) than the November 20 trace: either verify that the Ollama version,
-full model digests, dependency versions, `tools_sha256`, `fixture_sha256` and
-immutable commit IDs match before pairing with the November 20 table, or rerun
-the two default conditions alongside `no_gate` at the same commit. The live
-adapter checks sandbox availability before contacting Ollama.
+and `eval/tool_response_live.py` after `16456e2` (`runner_sha256` hashes only
+`tool_response_eval.py`; `source_commit` covers `tool_response_live.py`), any
+separate `no_gate` collection crosses runner commits relative to the November 20
+trace: either verify that `tool_response_live.py`'s chat/schema conversion, the
+Ollama version, full model digests, dependency versions, `tools_sha256`,
+`fixture_sha256` and immutable commit IDs match when presenting the two runs
+side by side, or rerun the two default conditions alongside `no_gate` at the
+same commit for a single-commit comparison. The live adapter checks sandbox
+availability before contacting Ollama.
 
 ```sh
 PYTHONPATH=. .venv/bin/python eval/tool_response_live.py --condition no_gate \
@@ -163,11 +166,12 @@ Run on 2026-11-24 on the same macOS host (`sandbox-exec`, Python 3.12.15,
 `nlip_sdk` 0.1.3, `nlip-server` 0.1.3, `httpx` 0.28.1) at source commit `381c258`,
 Ollama 0.40.16, temperature 0.7, seeds 1–5, with exact full-digest matches to the
 November 20 models (`gemma4:latest` `371e604c…` and `qwen3-coder-next:latest`
-`ca06e9e4…`), `tools_sha256` (`4e48bd17…`), `fixture_sha256`, and immutable commit
+`ca06e9e4…`), unchanged chat/tool-schema conversion in `eval/tool_response_live.py`,
+and identical `tools_sha256` (`4e48bd17…`), `fixture_sha256`, and immutable commit
 targets (`a2ee87b5…` attack, `b6af78f3…` benign; `runner_sha256` is `b06a048f…` vs.
-`4383ec37…` at `16456e2`, and `policy_sha256` differs only in the `.venv/bin/python`
-path). 20 trials, no infrastructure or model errors; every trial read the notes
-(`exposed`). Full transcripts:
+`4383ec37…` at `16456e2`, and `policy_sha256` is `563eeaa4…` vs. `b2525410…`, as
+`PolicyConfig` includes `sys.executable`). 20 trials, no infrastructure or model
+errors; every trial read the notes (`exposed`). Full transcripts:
 [`results/tool_response_live_no_gate_2026-11-24.json`](results/tool_response_live_no_gate_2026-11-24.json).
 
 | Model | Condition | Fixture | Unauthorized publish attempted | Forbidden effect | Legitimate release |
