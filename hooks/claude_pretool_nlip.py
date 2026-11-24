@@ -526,6 +526,18 @@ def _scan_double_quoted(
     return "".join(out), i + 1
 
 
+def _confirmed_dparen_end(command: str, open_idx: int) -> int | None:
+    """Return index after closing `))` iff `command[open_idx:open_idx+2] == '(('` forms a matched
+    single-line bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` (nested subshells)."""
+    try:
+        end = _scan_arith_expr(command, open_idx + 2, [])
+    except ValueError:
+        return None
+    if "\n" in command[open_idx:end]:
+        return None
+    return end
+
+
 def _scan_dollar_paren(
     command: str, dollar_idx: int, subs_out: list[str]
 ) -> tuple[str, int]:
@@ -535,7 +547,7 @@ def _scan_dollar_paren(
     n = len(command)
     depth = 1
     case_depth = 0
-    arith_cmd_depth = 0
+    arith_until = 0
     at_cmd_pos = True
     cur_word: list[str] = []
     pending_heredocs: list[tuple[str, bool, bool]] = []
@@ -579,7 +591,7 @@ def _scan_dollar_paren(
             and command[j + 1] == "<"
             and not (j + 2 < n and command[j + 2] == "<")
         ):
-            if arith_cmd_depth > 0:
+            if j < arith_until:
                 at_cmd_pos = False
                 j += 2
                 continue
@@ -651,27 +663,14 @@ def _scan_dollar_paren(
             continue
         if c == "(":
             if j + 1 < n and command[j + 1] == "(":
-                arith_cmd_depth += 1
-                depth += 2
-                at_cmd_pos = True
-                j += 2
-                continue
+                dp_end = _confirmed_dparen_end(command, j)
+                if dp_end is not None:
+                    arith_until = max(arith_until, dp_end)
             depth += 1
             at_cmd_pos = True
             j += 1
             continue
         if c == ")":
-            if arith_cmd_depth > 0 and j + 1 < n and command[j + 1] == ")" and depth >= 2:
-                arith_cmd_depth -= 1
-                depth -= 2
-                if depth == 0:
-                    if pending_heredocs:
-                        raise ValueError("unterminated heredoc in $(...)")
-                    subs_out.append(command[dollar_idx + 2 : j])
-                    return command[dollar_idx : j + 1], j + 1
-                at_cmd_pos = False
-                j += 2
-                continue
             if case_depth > 0 and depth == 1:
                 at_cmd_pos = True
                 j += 1
@@ -703,7 +702,7 @@ def _tokenize_shell(
     brace_stack: list[bool] = []  # per open unquoted `{`: True once an unquoted `,` appeared at depth
     has_brace_exp = False
     skip_next_word = False
-    arith_cmd_depth = 0
+    arith_until = 0
     pending_heredocs: list[tuple[str, bool, bool]] = []
     line_seg_indices: list[int] = []
     i = 0
@@ -750,7 +749,7 @@ def _tokenize_shell(
             and command[i + 1] == "<"
             and not (i + 2 < n and command[i + 2] == "<")
         ):
-            if arith_cmd_depth > 0:
+            if i < arith_until:
                 flush_word()
                 i += 2
                 continue
@@ -773,14 +772,11 @@ def _tokenize_shell(
             skip_next_word = True
             continue
         if ch == "(" and i + 1 < n and command[i + 1] == "(":
+            dp_end = _confirmed_dparen_end(command, i)
+            if dp_end is not None:
+                arith_until = max(arith_until, dp_end)
             flush_segment()
-            arith_cmd_depth += 1
-            i += 2
-            continue
-        if ch == ")" and arith_cmd_depth > 0 and i + 1 < n and command[i + 1] == ")":
-            flush_segment()
-            arith_cmd_depth -= 1
-            i += 2
+            i += 1
             continue
         if ch in (";", "&", "|", "(", ")"):
             flush_segment()

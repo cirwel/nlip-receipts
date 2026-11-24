@@ -642,6 +642,8 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "xargs git push"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo x | xargs --replace git push origin main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "((git push origin main))"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "((true) ); cat <<'EOF'\n'\nEOF\ngit push origin main\n#'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo \"$(((true) ); cat <<'EOF'\n'\nEOF\ngit push origin main\n#')\""}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "{ git push origin main; }"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "if true; then git push origin main; fi"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "eval git push origin main"}}), "deny", None),
