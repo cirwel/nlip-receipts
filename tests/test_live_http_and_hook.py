@@ -627,7 +627,11 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git -C /tmp/r -c a=b push staging HEAD:main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q && git --git-dir=/tmp/r push"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "/usr/bin/env FOO=1 git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "env -S 'git push origin main'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "env --split-string='git push origin main'"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sudo -u root git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sudo -iu root git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sudo -uroot git push origin main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "command git push origin main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "nohup git push origin main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "exec git push origin main"}}), "deny", None),
@@ -636,8 +640,22 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "xargs git push"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "{ git push origin main; }"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "if true; then git push origin main; fi"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "eval git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "coproc git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "function f { git push origin main; }; f"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "$'git' push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "$'\\x67it' push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "{git,push,origin,main}"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git {push,status}"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git -c alias.x=push x origin main"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sh -c 'git -C repo push origin main'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "bash --norc -c 'git push origin main'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "bash --rcfile /tmp/rc -c 'git push origin main'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "bash -c -- 'git push origin main'"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo $(git push origin main)"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'echo "$( (:); git push origin main)"'}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo `(:); git push origin main`"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'echo "$(case a in a) git push origin main;; esac)"'}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git send-pack /tmp/dest HEAD"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 12 --merge"}}), "deny", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh api -X PUT repos/o/r/pulls/1/merge"}}), "deny", None),
@@ -663,6 +681,7 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
         # Allowed normal operations emit empty stdout ("silent") so Claude Code prompts normally
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'git commit -m "fix git push bug"'}}), "silent", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "# git push comment\npytest -q"}}), "silent", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'echo "$(echo case /tmp/case/foo)" && cp src/{a,b}.py dst/'}}), "silent", None),
         (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q"}}), "silent", None),
         (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}), "silent", None),
         (json.dumps({"tool_name": "mcp__nlip__nlip_verify", "tool_input": {"repo_id": "svc"}}), "silent", None),
@@ -798,6 +817,29 @@ def test_server_config_removal_revokes_callers_and_policies(
     assert dec_removed_policy.action == "deny"
     assert dec_removed_policy.reason_code == "POLICY_NOT_FOUND"
 
+    # Even with strict_caller_auth=False, a previously registered caller that was removed from
+    # config remains explicitly revoked rather than reverting to an open unprovisioned identity.
+    cfg["strict_caller_auth"] = False
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    ext3 = build_extension_from_config(cfg_path)
+    for asserted_tok in ("agent-codex", "agent-codex:sec-codex"):
+        dec_revoked_nonstrict, _ = extract_decision_from_response(
+            ext3.handle_nlip_message(
+                pack_tool_call_message(
+                    ToolCallProposal(
+                        operation="verify",
+                        repo_id="svc",
+                        artifact_ref=c1,
+                        destination="staging",
+                        profile_id="unit",
+                    ),
+                    auth_token=asserted_tok,
+                )
+            )
+        )
+        assert dec_revoked_nonstrict.action == "deny"
+        assert dec_revoked_nonstrict.reason_code == "CALLER_AUTH_INVALID"
+
 
 def test_load_or_create_hmac_key_enforces_mode_owner_and_length(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -806,6 +848,14 @@ def test_load_or_create_hmac_key_enforces_mode_owner_and_length(
     key = load_or_create_hmac_key(key_path)
     assert len(key) == 32
     assert (key_path.stat().st_mode & 0o777) == 0o600
+
+    # Key owned by a different UID is rejected.
+    if hasattr(os, "getuid"):
+        real_uid = os.getuid()
+        monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+        with pytest.raises(PermissionError, match="owned by uid"):
+            load_or_create_hmac_key(key_path)
+        monkeypatch.undo()
 
     # Group/world-readable key is tightened to 0600 on load when chmod succeeds.
     os.chmod(key_path, 0o644)

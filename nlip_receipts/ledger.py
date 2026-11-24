@@ -24,7 +24,8 @@ _DDL = (
     )""",
     """CREATE TABLE IF NOT EXISTS caller_credentials (
         caller_id TEXT PRIMARY KEY,
-        secret_hmac TEXT NOT NULL
+        secret_hmac TEXT NOT NULL,
+        revoked INTEGER NOT NULL DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS policies (
         repo_id TEXT NOT NULL,
@@ -133,6 +134,11 @@ class ReceiptLedger:
             try:
                 for stmt in _DDL:
                     conn.execute(stmt)
+                ccols = {r["name"] for r in conn.execute("PRAGMA table_info(caller_credentials)")}
+                if "revoked" not in ccols:
+                    conn.execute(
+                        "ALTER TABLE caller_credentials ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0"
+                    )
                 dcols = {r["name"] for r in conn.execute("PRAGMA table_info(decisions)")}
                 if "conversation_id" not in dcols:
                     conn.execute("ALTER TABLE decisions ADD COLUMN conversation_id TEXT")
@@ -193,36 +199,48 @@ class ReceiptLedger:
         tag = hmac.new(self._hmac_key, msg, hashlib.sha256).hexdigest()
         with self._lock, closing(self._connect()) as conn, conn:
             conn.execute(
-                """INSERT INTO caller_credentials (caller_id, secret_hmac)
-                   VALUES (?, ?)
-                   ON CONFLICT(caller_id) DO UPDATE SET secret_hmac = excluded.secret_hmac""",
+                """INSERT INTO caller_credentials (caller_id, secret_hmac, revoked)
+                   VALUES (?, ?, 0)
+                   ON CONFLICT(caller_id) DO UPDATE SET
+                       secret_hmac = excluded.secret_hmac,
+                       revoked = 0""",
                 (caller_id, tag),
             )
 
     def sync_caller_ids(self, active_callers: set[str]) -> int:
-        """Remove stored credentials for callers omitted from `active_callers`."""
+        """Revoke stored credentials for callers omitted from `active_callers`.
+
+        Rows are marked `revoked = 1` rather than deleted so a removed caller fails closed even
+        when `strict_caller_auth=False` (instead of reverting to an unprovisioned open identity).
+        """
         with self._lock, closing(self._connect()) as conn, conn:
             if not active_callers:
-                return conn.execute("DELETE FROM caller_credentials").rowcount
+                return conn.execute(
+                    "UPDATE caller_credentials SET revoked = 1 WHERE revoked = 0"
+                ).rowcount
             placeholders = ",".join("?" for _ in active_callers)
             return conn.execute(
-                f"DELETE FROM caller_credentials WHERE caller_id NOT IN ({placeholders})",
+                f"UPDATE caller_credentials SET revoked = 1 "
+                f"WHERE caller_id NOT IN ({placeholders}) AND revoked = 0",
                 tuple(sorted(active_callers)),
             ).rowcount
 
     def verify_caller_secret(self, caller_id: str, secret: Optional[str]) -> bool:
         """If a secret is registered for `caller_id`, verify `secret` via HMAC.
-        With `strict_caller_auth=True` (the default), unprovisioned caller identities fail closed
-        (`False`). `strict_caller_auth=False` accepts any unprovisioned `caller_id` as asserted,
-        which makes caller binding (Confused-Deputy protection) advisory only.
+        Explicitly revoked callers always fail closed (`False`). With `strict_caller_auth=True`
+        (the default), unprovisioned caller identities also fail closed (`False`).
+        `strict_caller_auth=False` accepts unprovisioned `caller_id`s that were never registered
+        and revoked, which makes caller binding (Confused-Deputy protection) advisory only.
         """
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT secret_hmac FROM caller_credentials WHERE caller_id = ?",
+                "SELECT secret_hmac, revoked FROM caller_credentials WHERE caller_id = ?",
                 (caller_id,),
             ).fetchone()
         if not row:
             return not self.strict_caller_auth
+        if int(row["revoked"]) != 0:
+            return False
         if not secret:
             return False
         msg = f"caller|{len(caller_id)}:{caller_id}|{len(secret)}:{secret}".encode("utf-8")
