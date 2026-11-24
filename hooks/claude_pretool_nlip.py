@@ -38,19 +38,64 @@ _GIT_ARG_FLAGS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 )
 _SHELL_BINARIES = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
-_SHELL_ARG_LONG_FLAGS = frozenset({"--rcfile", "--init-file", "-O", "+O"})
+_SHELL_ARG_LONG_FLAGS = frozenset({"--rcfile", "--init-file", "-o", "+o", "-O", "+O"})
 _SHELL_PREFIX_KEYWORDS = frozenset(
     {"!", "{", "}", "if", "then", "elif", "else", "do", "while", "until", "coproc", "function"}
 )
 _WRAPPER_ARG_FLAGS: dict[str, frozenset[str]] = {
     "env": frozenset({"-u", "-C", "--unset", "--chdir"}),
-    "sudo": frozenset({"-u", "-g", "-C", "-D", "-R", "-T", "-h", "-p", "-r", "-t"}),
+    "sudo": frozenset(
+        {
+            "-u",
+            "-g",
+            "-C",
+            "-D",
+            "-R",
+            "-T",
+            "-h",
+            "-p",
+            "-r",
+            "-t",
+            "-U",
+            "--user",
+            "--group",
+            "--close-from",
+            "--chdir",
+            "--chroot",
+            "--command-timeout",
+            "--host",
+            "--prompt",
+            "--role",
+            "--type",
+            "--other-user",
+        }
+    ),
     "command": frozenset(),
     "exec": frozenset({"-a"}),
     "nohup": frozenset(),
-    "time": frozenset({"-o", "-f"}),
-    "nice": frozenset({"-n"}),
-    "xargs": frozenset({"-I", "-J", "-L", "-n", "-P", "-s", "-d", "-E", "-a"}),
+    "time": frozenset({"-o", "-f", "--output", "--format"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "xargs": frozenset(
+        {
+            "-I",
+            "-J",
+            "-L",
+            "-n",
+            "-P",
+            "-s",
+            "-d",
+            "-E",
+            "-a",
+            "--replace",
+            "--max-lines",
+            "--max-args",
+            "--max-procs",
+            "--max-chars",
+            "--delimiter",
+            "--eof",
+            "--arg-file",
+        }
+    ),
 }
 _EDIT_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 _FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
@@ -113,8 +158,8 @@ def _git_has_alias_override(tokens: list[str]) -> bool:
     return False
 
 
-def _git_subcommand(tokens: list[str]) -> str | None:
-    """Extract the primary git subcommand from a command segment starting with `git`."""
+def _git_subcommand_index(tokens: list[str]) -> int | None:
+    """Return the index of the primary git subcommand in `tokens`, or `None`."""
     idx = 1
     while idx < len(tokens):
         tok = tokens[idx]
@@ -130,8 +175,14 @@ def _git_subcommand(tokens: list[str]) -> str | None:
         if tok.startswith("-"):
             idx += 1
             continue
-        return tok
-    return tokens[idx] if idx < len(tokens) else None
+        return idx
+    return idx if idx < len(tokens) else None
+
+
+def _git_subcommand(tokens: list[str]) -> str | None:
+    """Extract the primary git subcommand from a command segment starting with `git`."""
+    idx = _git_subcommand_index(tokens)
+    return tokens[idx] if idx is not None else None
 
 
 def _scan_ansi_c_quote(command: str, start: int) -> tuple[str, int]:
@@ -202,6 +253,177 @@ def _scan_backtick(
     return command[open_idx : j + 1], j + 1
 
 
+def _scan_dollar_brace(
+    command: str, dollar_idx: int, subs_out: list[str]
+) -> tuple[str, int]:
+    """Scan `${...}` parameter expansion starting at `dollar_idx`, extracting nested substitutions
+    without treating `${a},${b}` as brace expansion."""
+    j = dollar_idx + 2
+    n = len(command)
+    depth = 1
+    while j < n and depth > 0:
+        c = command[j]
+        if c == "\\":
+            if j + 1 >= n:
+                raise ValueError("trailing backslash in ${...}")
+            j += 2
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "'":
+            _, j = _scan_ansi_c_quote(command, j + 2)
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "(":
+            _, j = _scan_dollar_paren(command, j, subs_out)
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "{":
+            _, j = _scan_dollar_brace(command, j, subs_out)
+            continue
+        if c == "'":
+            end = command.find("'", j + 1)
+            if end == -1:
+                raise ValueError("unclosed single quote in ${...}")
+            j = end + 1
+            continue
+        if c == '"':
+            _, j = _scan_double_quoted(command, j + 1, subs_out)
+            continue
+        if c == "`":
+            _, j = _scan_backtick(command, j, in_double=False, subs_out=subs_out)
+            continue
+        if c == "{":
+            depth += 1
+            j += 1
+            continue
+        if c == "}":
+            depth -= 1
+            if depth == 0:
+                return command[dollar_idx : j + 1], j + 1
+            j += 1
+            continue
+        j += 1
+    raise ValueError("unclosed ${...} expansion")
+
+
+def _parse_heredoc_op(command: str, lt_idx: int) -> tuple[tuple[str, bool, bool], int]:
+    """Parse `<<` or `<<-` starting at `lt_idx`; return `((delim, quoted, strip_tabs), next_idx)`."""
+    n = len(command)
+    k = lt_idx + 2
+    strip_tabs = False
+    if k < n and command[k] == "-":
+        strip_tabs = True
+        k += 1
+    while k < n and command[k] in (" ", "\t"):
+        k += 1
+    delim_chars: list[str] = []
+    delim_quoted = False
+    while k < n and command[k] not in (" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "<", ">"):
+        ch = command[k]
+        if ch == "\\":
+            if k + 1 >= n:
+                raise ValueError("trailing backslash in heredoc delimiter")
+            if command[k + 1] == "\n":
+                k += 2
+                continue
+            delim_quoted = True
+            delim_chars.append(command[k + 1])
+            k += 2
+            continue
+        if ch == "$" and k + 1 < n and command[k + 1] == "'":
+            delim_quoted = True
+            decoded, k = _scan_ansi_c_quote(command, k + 2)
+            delim_chars.append(decoded)
+            continue
+        if ch == "$" and k + 1 < n and command[k + 1] == '"':
+            delim_quoted = True
+            k += 1
+            ch = '"'
+        if ch == "'":
+            delim_quoted = True
+            end = command.find("'", k + 1)
+            if end == -1:
+                raise ValueError("unclosed single quote in heredoc delimiter")
+            delim_chars.append(command[k + 1 : end])
+            k = end + 1
+            continue
+        if ch == '"':
+            delim_quoted = True
+            k += 1
+            while k < n and command[k] != '"':
+                if command[k] == "\\" and k + 1 < n and command[k + 1] in ('"', "\\", "$", "`"):
+                    delim_chars.append(command[k + 1])
+                    k += 2
+                    continue
+                delim_chars.append(command[k])
+                k += 1
+            if k >= n:
+                raise ValueError("unclosed double quote in heredoc delimiter")
+            k += 1
+            continue
+        delim_chars.append(ch)
+        k += 1
+    if not delim_chars:
+        raise ValueError("empty heredoc delimiter")
+    return ("".join(delim_chars), delim_quoted, strip_tabs), k
+
+
+def _scan_unquoted_heredoc_subs(body: str, subs_out: list[str]) -> None:
+    """In an unquoted heredoc body, quotes/`#`/`()` are literal; only `$(...)`, `${...}`, and
+    backticks expand."""
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == "$" and i + 1 < n and body[i + 1] == "(":
+            _, i = _scan_dollar_paren(body, i, subs_out)
+            continue
+        if ch == "$" and i + 1 < n and body[i + 1] == "{":
+            _, i = _scan_dollar_brace(body, i, subs_out)
+            continue
+        if ch == "`":
+            _, i = _scan_backtick(body, i, in_double=False, subs_out=subs_out)
+            continue
+        i += 1
+
+
+def _consume_heredocs(
+    command: str,
+    pos_after_nl: int,
+    pending: list[tuple[str, bool, bool]],
+    subs_out: list[str],
+) -> tuple[int, list[str]]:
+    """Consume queued heredoc bodies starting at `pos_after_nl`; return `(next_pos, bodies)`."""
+    bodies: list[str] = []
+    pos = pos_after_nl
+    n = len(command)
+    for delim, delim_quoted, strip_tabs in pending:
+        body_start = pos
+        matched = False
+        while pos <= n:
+            nl = command.find("\n", pos)
+            line_end = nl if nl != -1 else n
+            raw_line = command[pos:line_end]
+            cmp_line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
+            if strip_tabs:
+                cmp_line = cmp_line.lstrip("\t")
+            if cmp_line == delim:
+                body_text = command[body_start:pos]
+                bodies.append(body_text)
+                if not delim_quoted:
+                    _scan_unquoted_heredoc_subs(body_text, subs_out)
+                pos = nl + 1 if nl != -1 else n
+                matched = True
+                break
+            if nl == -1:
+                break
+            pos = nl + 1
+        if not matched:
+            raise ValueError(f"unterminated heredoc ({delim!r})")
+    pending.clear()
+    return pos, bodies
+
+
 def _scan_double_quoted(
     command: str, start: int, subs_out: list[str]
 ) -> tuple[str, int]:
@@ -229,6 +451,10 @@ def _scan_double_quoted(
             raw_sub, i = _scan_dollar_paren(command, i, subs_out)
             out.append(raw_sub)
             continue
+        if ch == "$" and i + 1 < n and command[i + 1] == "{":
+            raw_brace, i = _scan_dollar_brace(command, i, subs_out)
+            out.append(raw_brace)
+            continue
         if ch == "`":
             raw_bt, i = _scan_backtick(command, i, in_double=True, subs_out=subs_out)
             out.append(raw_bt)
@@ -243,15 +469,18 @@ def _scan_double_quoted(
 def _scan_dollar_paren(
     command: str, dollar_idx: int, subs_out: list[str]
 ) -> tuple[str, int]:
-    """Scan `$(...)` starting at `dollar_idx`, respecting nested quotes, nested substitutions, and
-    command-position `case ... esac` pattern `)` delimiters. Appends inner body to `subs_out`."""
+    """Scan `$(...)` starting at `dollar_idx`, respecting nested quotes, heredocs, substitutions,
+    and command-position `case ... esac` pattern `)` delimiters. Appends inner body to `subs_out`."""
     j = dollar_idx + 2
     n = len(command)
     depth = 1
     case_depth = 0
     at_cmd_pos = True
     cur_word: list[str] = []
-    _DELIMS = frozenset({" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "'", '"', "`", "\\", "#"})
+    pending_heredocs: list[tuple[str, bool, bool]] = []
+    _DELIMS = frozenset(
+        {" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "'", '"', "`", "\\", "#", "<", ">"}
+    )
     _CMD_FOLLOW_KW = frozenset({"!", "{", "if", "then", "elif", "else", "do", "while", "until"})
 
     def flush_kw() -> None:
@@ -272,11 +501,28 @@ def _scan_dollar_paren(
 
     while j < n and depth > 0:
         c = command[j]
-        if c not in _DELIMS and not (c == "$" and j + 1 < n and command[j + 1] in ("(", "'")):
+        if c not in _DELIMS and not (
+            c == "$" and j + 1 < n and command[j + 1] in ("(", "{", "'", '"')
+        ):
             cur_word.append(c)
             j += 1
             continue
         flush_kw()
+        if (
+            c == "<"
+            and j + 1 < n
+            and command[j + 1] == "<"
+            and not (j + 2 < n and command[j + 2] == "<")
+        ):
+            spec, j = _parse_heredoc_op(command, j)
+            pending_heredocs.append(spec)
+            continue
+        if c == "\n":
+            at_cmd_pos = True
+            j += 1
+            if pending_heredocs:
+                j, _ = _consume_heredocs(command, j, pending_heredocs, subs_out)
+            continue
         if c == "#":
             if j == dollar_idx + 2 or command[j - 1] in (
                 " ",
@@ -307,6 +553,10 @@ def _scan_dollar_paren(
             _, j = _scan_dollar_paren(command, j, subs_out)
             at_cmd_pos = False
             continue
+        if c == "$" and j + 1 < n and command[j + 1] == "{":
+            _, j = _scan_dollar_brace(command, j, subs_out)
+            at_cmd_pos = False
+            continue
         if c == "'":
             end = command.find("'", j + 1)
             if end == -1:
@@ -322,7 +572,7 @@ def _scan_dollar_paren(
             _, j = _scan_backtick(command, j, in_double=False, subs_out=subs_out)
             at_cmd_pos = False
             continue
-        if c in (";", "&", "|", "\n"):
+        if c in (";", "&", "|"):
             at_cmd_pos = True
             j += 1
             continue
@@ -338,6 +588,8 @@ def _scan_dollar_paren(
                 continue
             depth -= 1
             if depth == 0:
+                if pending_heredocs:
+                    raise ValueError("unterminated heredoc in $(...)")
                 subs_out.append(command[dollar_idx + 2 : j])
                 return command[dollar_idx : j + 1], j + 1
             at_cmd_pos = False
@@ -347,33 +599,52 @@ def _scan_dollar_paren(
     raise ValueError("unclosed $(...) substitution")
 
 
-def _tokenize_shell(command: str) -> tuple[list[list[tuple[str, bool]]], list[str]]:
-    """Tokenize `command` into `(segments, command_substitutions)`, where each segment is a list of
-    `(token, has_unquoted_brace_expansion)` pairs. Raises `ValueError` on unclosed quotes/substitutions.
+def _tokenize_shell(
+    command: str,
+) -> tuple[list[tuple[list[tuple[str, bool]], list[str]]], list[str]]:
+    """Tokenize `command` into `([(segment_tokens, heredoc_bodies), ...], command_substitutions)`,
+    where each segment token is `(text, has_unquoted_brace_expansion)`.
     """
-    segments: list[list[tuple[str, bool]]] = []
+    segments: list[tuple[list[tuple[str, bool]], list[str]]] = []
     subs: list[str] = []
     current: list[tuple[str, bool]] = []
     buf: list[str] = []
     word_open = False
-    brace_stage = 0  # 0 -> none, 1 -> saw unquoted '{', 2 -> saw unquoted ','
+    brace_stack: list[bool] = []  # per open unquoted `{`: True once an unquoted `,` appeared at depth
     has_brace_exp = False
+    skip_next_word = False
+    pending_heredocs: list[tuple[str, bool, bool]] = []
+    line_seg_indices: list[int] = []
     i = 0
     n = len(command)
 
-    def flush_word() -> None:
-        nonlocal word_open, brace_stage, has_brace_exp
-        if word_open:
-            current.append(("".join(buf), has_brace_exp))
+    def discard_io_number_or_flush() -> None:
+        nonlocal word_open, has_brace_exp
+        if word_open and "".join(buf).isdigit() and not has_brace_exp and not skip_next_word:
             buf.clear()
             word_open = False
-            brace_stage = 0
+            brace_stack.clear()
+        else:
+            flush_word()
+
+    def flush_word() -> None:
+        nonlocal word_open, has_brace_exp, skip_next_word
+        if word_open:
+            if not skip_next_word:
+                current.append(("".join(buf), has_brace_exp))
+            skip_next_word = False
+            buf.clear()
+            word_open = False
+            brace_stack.clear()
             has_brace_exp = False
 
     def flush_segment() -> None:
+        nonlocal skip_next_word
         flush_word()
+        skip_next_word = False
         if current:
-            segments.append(list(current))
+            line_seg_indices.append(len(segments))
+            segments.append((list(current), []))
             current.clear()
 
     while i < n:
@@ -382,9 +653,43 @@ def _tokenize_shell(command: str) -> tuple[list[list[tuple[str, bool]]], list[st
             flush_word()
             i += 1
             continue
-        if ch in (";", "&", "|", "(", ")", "\n"):
+        if (
+            ch == "<"
+            and i + 1 < n
+            and command[i + 1] == "<"
+            and not (i + 2 < n and command[i + 2] == "<")
+        ):
+            discard_io_number_or_flush()
+            spec, i = _parse_heredoc_op(command, i)
+            pending_heredocs.append(spec)
+            continue
+        if ch == "\n":
             flush_segment()
             i += 1
+            if pending_heredocs:
+                i, bodies = _consume_heredocs(command, i, pending_heredocs, subs)
+                for seg_idx in line_seg_indices:
+                    segments[seg_idx][1].extend(bodies)
+            line_seg_indices.clear()
+            continue
+        if ch == "&" and i + 1 < n and command[i + 1] == ">":
+            flush_word()
+            i += 3 if (i + 2 < n and command[i + 2] == ">") else 2
+            skip_next_word = True
+            continue
+        if ch in (";", "&", "|", "(", ")"):
+            flush_segment()
+            i += 1
+            continue
+        if ch in ("<", ">"):
+            discard_io_number_or_flush()
+            if ch == "<" and i + 2 < n and command[i : i + 3] == "<<<":
+                i += 3
+            elif i + 1 < n and command[i : i + 2] in (">>", ">|", "<>", ">&", "<&"):
+                i += 2
+            else:
+                i += 1
+            skip_next_word = True
             continue
         if ch == "#" and not word_open:
             flush_segment()
@@ -405,6 +710,11 @@ def _tokenize_shell(command: str) -> tuple[list[list[tuple[str, bool]]], list[st
             word_open = True
             raw_sub, i = _scan_dollar_paren(command, i, subs)
             buf.append(raw_sub)
+            continue
+        if ch == "$" and i + 1 < n and command[i + 1] == "{":
+            word_open = True
+            raw_brace, i = _scan_dollar_brace(command, i, subs)
+            buf.append(raw_brace)
             continue
         if ch == "'":
             word_open = True
@@ -436,15 +746,18 @@ def _tokenize_shell(command: str) -> tuple[list[list[tuple[str, bool]]], list[st
             continue
         word_open = True
         if ch == "{":
-            brace_stage = max(brace_stage, 1)
-        elif ch == "," and brace_stage >= 1:
-            brace_stage = 2
-        elif ch == "}" and brace_stage == 2:
-            has_brace_exp = True
+            brace_stack.append(False)
+        elif ch == "," and brace_stack:
+            brace_stack[-1] = True
+        elif ch == "}" and brace_stack:
+            if brace_stack.pop():
+                has_brace_exp = True
         buf.append(ch)
         i += 1
 
     flush_segment()
+    if pending_heredocs:
+        raise ValueError("unterminated heredoc at end of command")
     return segments, subs
 
 
@@ -537,7 +850,7 @@ def _unwrap_segment(
 
 def _shell_dash_c_arg(tokens: list[str]) -> str | None:
     """Extract the command-string operand of `sh`/`bash` `-c` (supporting `--norc -c`, `--rcfile x -c`,
-    `-lc`, and `-c -- 'cmd'`)."""
+    `-o pipefail -c`, `-eo pipefail -c`, `-lc`, and `-c -- 'cmd'`)."""
     has_c = False
     j = 1
     n = len(tokens)
@@ -555,12 +868,28 @@ def _shell_dash_c_arg(tokens: list[str]) -> str | None:
         if (tok.startswith("-") or tok.startswith("+")) and len(tok) > 1:
             if tok.startswith("-") and "c" in tok[1:]:
                 has_c = True
-            j += 1
+            consumed_next = False
+            for k in range(1, len(tok)):
+                if tok[k] in ("o", "O"):
+                    consumed_next = k == len(tok) - 1
+                    break
+            j += 2 if consumed_next else 1
             continue
         break
     if has_c and j < n:
         return tokens[j]
     return None
+
+
+def _gh_subcommand_limit(tokens: list[str]) -> int:
+    """Return slice upper bound covering `gh` plus its first two non-flag subcommand words."""
+    seen = 0
+    for idx in range(1, len(tokens)):
+        if not tokens[idx].startswith("-"):
+            seen += 1
+            if seen == 2:
+                return idx + 1
+    return len(tokens)
 
 
 def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
@@ -580,7 +909,7 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
         if nested_sub:
             return nested_sub
 
-    for raw_seg in segments:
+    for raw_seg, heredoc_bodies in segments:
         unwrapped, wrapper_nested = _unwrap_segment(raw_seg)
         for wn in wrapper_nested:
             res = _check_bash_command(wn, _depth=_depth + 1)
@@ -597,10 +926,15 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
         seg = [t for t, _ in unwrapped]
         base = os.path.basename(seg[0])
 
-        if base == "eval" and len(seg) > 1:
-            nested_eval = _check_bash_command(" ".join(seg[1:]), _depth=_depth + 1)
-            if nested_eval:
-                return nested_eval
+        if base == "eval":
+            if len(seg) > 1:
+                nested_eval = _check_bash_command(" ".join(seg[1:]), _depth=_depth + 1)
+                if nested_eval:
+                    return nested_eval
+            for hb in heredoc_bodies:
+                nested_hb = _check_bash_command(hb, _depth=_depth + 1)
+                if nested_hb:
+                    return nested_hb
             continue
 
         if base == "find":
@@ -620,9 +954,10 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
                 nested = _check_bash_command(dash_c, _depth=_depth + 1)
                 if nested:
                     return nested
-
-        if base in ("git", "gh") and any(has_b for _, has_b in unwrapped):
-            return f"Unquoted brace expansion in `{base}` arguments is blocked by the NLIP Type-3 guardrail."
+            for hb in heredoc_bodies:
+                nested_hb = _check_bash_command(hb, _depth=_depth + 1)
+                if nested_hb:
+                    return nested_hb
 
         if base == "git":
             if _git_has_alias_override(seg):
@@ -630,7 +965,14 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
                     "Inline `git -c alias.*` configuration from Bash is blocked by the NLIP Type-3 "
                     "guardrail."
                 )
-            sub = _git_subcommand(seg)
+            sub_idx = _git_subcommand_index(seg)
+            brace_limit = (sub_idx + 1) if sub_idx is not None else len(unwrapped)
+            if any(has_b for _, has_b in unwrapped[:brace_limit]):
+                return (
+                    "Unquoted brace expansion in `git` subcommand/options is blocked by the NLIP "
+                    "Type-3 guardrail."
+                )
+            sub = seg[sub_idx] if sub_idx is not None else None
             if sub in _GIT_WRITE_SUBCOMMANDS:
                 return (
                     f"Direct `git {sub}` from Bash is blocked by the NLIP Type-3 guardrail. "
@@ -640,6 +982,16 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
             return f"Direct `{base}` is blocked; publish via `nlip_publish`."
         elif base == "gh":
             non_flags = [t for t in seg[1:] if not t.startswith("-")]
+            gh_limit = (
+                len(unwrapped)
+                if (non_flags and non_flags[0] == "api")
+                else _gh_subcommand_limit(seg)
+            )
+            if any(has_b for _, has_b in unwrapped[:gh_limit]):
+                return (
+                    "Unquoted brace expansion in `gh` subcommand/API endpoint is blocked by the "
+                    "NLIP Type-3 guardrail."
+                )
             if len(non_flags) >= 2 and non_flags[0] == "pr" and non_flags[1] == "merge":
                 return "Direct `gh pr merge` from Bash is blocked by the NLIP Type-3 guardrail."
             if non_flags and non_flags[0] == "api" and any(
