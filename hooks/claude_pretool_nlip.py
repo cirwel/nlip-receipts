@@ -251,6 +251,10 @@ def _scan_backtick(
     return command[open_idx : j + 1], j + 1
 
 
+class _NotDparenError(ValueError):
+    """Raised when `((` closes with a single `)` (valid nested subshell, not `(( ... ))`)."""
+
+
 def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[str]) -> int:
     """Scan inside `$(( ... ))` or `(( ... ))` starting after `((` up to the matching `))`.
     Treats `<<` as bitwise left-shift while still extracting nested `$(...)`, `${...}`, and backticks.
@@ -260,10 +264,20 @@ def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[
     paren_depth = 0
     while j < n:
         c = command[j]
+        if c == "#" and (
+            j == start_after_open_parens
+            or command[j - 1] in (" ", "\t", "\r", "\n", ";", "&", "|", "(", ")")
+        ):
+            while j < n and command[j] != "\n":
+                j += 1
+            continue
         if c == "\\":
             if j + 1 >= n:
                 raise ValueError("trailing backslash in arithmetic expression")
             j += 2
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "'":
+            _, j = _scan_ansi_c_quote(command, j + 2)
             continue
         if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
             j = _scan_arith_expr(command, j + 3, subs_out)
@@ -294,7 +308,7 @@ def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[
             if paren_depth == 0:
                 if j + 1 < n and command[j + 1] == ")":
                     return j + 2
-                raise ValueError("unbalanced ')' in arithmetic expression")
+                raise _NotDparenError("single ')' after '((' — nested subshell")
             paren_depth -= 1
             j += 1
             continue
@@ -528,12 +542,11 @@ def _scan_double_quoted(
 
 def _confirmed_dparen_end(command: str, open_idx: int) -> int | None:
     """Return index after closing `))` iff `command[open_idx:open_idx+2] == '(('` forms a matched
-    bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` (nested subshells). Fails closed
-    on multi-line `(( ... ))` spans containing `<<` so neither bash arithmetic nor POSIX `/bin/sh`
-    subshell parsing can smuggle a heredoc."""
+    bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` on `_NotDparenError` (nested
+    subshells). Propagates any inner syntax/ambiguous-span `ValueError` so callers fail closed."""
     try:
         end = _scan_arith_expr(command, open_idx + 2, [])
-    except ValueError:
+    except _NotDparenError:
         return None
     span = command[open_idx:end]
     if "\n" in span and "<<" in span:
