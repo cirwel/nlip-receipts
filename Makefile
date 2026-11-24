@@ -3,7 +3,7 @@ PIP ?= .venv/bin/pip
 PYTEST ?= .venv/bin/pytest
 SYS_PYTHON ?= python3
 
-.PHONY: all setup test eval demo paper clean
+.PHONY: all setup test eval demo demo-http paper clean
 
 all: test eval demo
 
@@ -24,6 +24,9 @@ eval:
 
 demo:
 	PYTHONPATH=. $(PYTHON) demo.py
+
+demo-http:
+	PYTHONPATH=. $(PYTHON) demo.py --http
 
 paper:
 	cd paper && tectonic safeose27_report.tex

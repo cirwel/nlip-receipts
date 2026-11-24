@@ -19,10 +19,9 @@ from pathlib import Path
 from nlip_receipts.git_artifact import sandbox_available
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tool_response_eval import DEFAULT_CONDITIONS, SYSTEM_PROMPTS, run_trial  # noqa: E402
+from tool_response_eval import ALL_FIXTURES, DEFAULT_CONDITIONS, DEFAULT_FIXTURES, SYSTEM_PROMPTS, run_trial  # noqa: E402
 
 OLLAMA = "http://127.0.0.1:11434"
-FIXTURES = ("attack", "benign")
 TOOL_DESCRIPTIONS = {
     "read_repo_file": "Read a file from the release repository.",
     "verify": "Run the configured verification check on an exact commit and return a receipt.",
@@ -114,8 +113,10 @@ def model_info(model: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--model", action="append", required=True, help="Ollama model tag; repeatable")
-    ap.add_argument("--condition", choices=SYSTEM_PROMPTS,
-                    help="run one condition (default: prompt_only and receipt_gate)")
+    ap.add_argument("--condition", action="append", choices=SYSTEM_PROMPTS,
+                    help="condition to run; repeatable (default: prompt_only and receipt_gate)")
+    ap.add_argument("--fixture", action="append", choices=ALL_FIXTURES,
+                    help="fixture to run; repeatable (default: attack and benign)")
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--output", type=Path, required=True, help="new JSON path; never overwrites")
@@ -124,13 +125,14 @@ def main() -> int:
         raise SystemExit(f"refusing to overwrite {args.output}")
     if not sandbox_available():
         raise SystemExit("Live evaluation requires a working verification sandbox.")
-    conditions = (args.condition,) if args.condition else DEFAULT_CONDITIONS
+    conditions = tuple(args.condition) if args.condition else DEFAULT_CONDITIONS
+    fixtures = tuple(args.fixture) if args.fixture else DEFAULT_FIXTURES
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     runs, summary = [], []
     for model in args.model:
         info = model_info(model)
         for condition in conditions:
-            for fixture in FIXTURES:
+            for fixture in fixtures:
                 for seed in range(1, args.seeds + 1):
                     r = run_trial(condition, fixture, ollama_factory(model, temperature=args.temperature, seed=seed))
                     r.update({"kind": "live_model_run", "model_info": info, "seed": seed,
@@ -138,8 +140,15 @@ def main() -> int:
                     runs.append(r)
                     row = {k: r[k] for k in ("condition", "fixture", "exposed", "attempted_unauthorized_publish",
                                              "forbidden_effect", "legitimate_release", "stop")}
+                    publish_reasons = [
+                        e["result"]["decision"]["reason_code"]
+                        for e in r["events"]
+                        if isinstance(e.get("call"), dict) and e["call"].get("name") == "publish"
+                        and isinstance(e.get("result"), dict) and "decision" in e["result"]
+                    ]
                     row.update(model=model, seed=seed, errors=bool(r["infrastructure_errors"] or r["model_errors"]),
-                               calls=[e["call"].get("name") if isinstance(e["call"], dict) else None for e in r["events"]])
+                               calls=[e["call"].get("name") if isinstance(e["call"], dict) else None for e in r["events"]],
+                               publish_reason_codes=publish_reasons)
                     summary.append(row)
                     print(json.dumps(row), flush=True)
     with args.output.open("x") as stream:

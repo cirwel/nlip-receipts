@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Optional
 
+import httpx
 from nlip_sdk.nlip import NLIP_Message
 
 from .gate import Type3ReceiptExtension
@@ -22,6 +23,47 @@ from .schemas import (
     VerificationReceipt,
     pack_tool_call_message,
 )
+
+
+class NLIPTransportError(RuntimeError):
+    """Raised when an out-of-process NLIP HTTP request fails or returns a non-NLIP payload."""
+
+
+def http_nlip_transport(
+    base_url: str,
+    *,
+    timeout: float = 30.0,
+    client: Optional[httpx.Client] = None,
+) -> Callable[[NLIP_Message], NLIP_Message]:
+    """Return a `transport` callable that POSTs ECMA-430 messages to `{base_url}/nlip/`."""
+    trimmed = base_url.rstrip("/")
+    endpoint = f"{trimmed}/" if trimmed.endswith("/nlip") else f"{trimmed}/nlip/"
+
+    def _send(msg: NLIP_Message) -> NLIP_Message:
+        try:
+            if client is not None:
+                rsp = client.post(endpoint, json=msg.to_dict(), timeout=timeout)
+            else:
+                rsp = httpx.post(endpoint, json=msg.to_dict(), timeout=timeout)
+            rsp.raise_for_status()
+            body = rsp.json()
+        except httpx.HTTPError as exc:
+            raise NLIPTransportError(f"NLIP HTTP transport failed for {endpoint}: {exc}") from exc
+        except ValueError as exc:
+            raise NLIPTransportError(f"NLIP endpoint {endpoint} returned invalid JSON: {exc}") from exc
+
+        if not isinstance(body, dict):
+            raise NLIPTransportError(
+                f"NLIP endpoint {endpoint} returned {type(body).__name__}, expected JSON object"
+            )
+        try:
+            return NLIP_Message(**body)
+        except (TypeError, ValueError) as exc:
+            raise NLIPTransportError(
+                f"NLIP endpoint {endpoint} returned malformed NLIP_Message payload: {exc}"
+            ) from exc
+
+    return _send
 
 
 def extract_decision_from_response(
@@ -57,16 +99,18 @@ class BaseHarnessAdapter:
 
     def __init__(
         self,
-        extension: Type3ReceiptExtension,
-        auth_token: str,
+        extension: Optional[Type3ReceiptExtension] = None,
+        auth_token: str = "",
         *,
         transport: Optional[Callable[[NLIP_Message], NLIP_Message]] = None,
     ):
-        """`transport` sends an NLIP request and returns the response (e.g. an HTTP POST to
-        `/nlip/`); by default the adapter calls the extension in-process."""
+        """`transport` sends an NLIP request and returns the response (e.g. `http_nlip_transport(url)`
+        for `POST /nlip/`); by default the adapter calls `extension` in-process."""
+        if transport is None and extension is None:
+            raise ValueError("either `extension` (in-process) or `transport` (remote/HTTP) is required")
         self.extension = extension
         self.auth_token = auth_token
-        self.transport = transport or extension.handle_nlip_message
+        self.transport = transport or extension.handle_nlip_message  # type: ignore[union-attr]
 
     def send_nlip(
         self,
