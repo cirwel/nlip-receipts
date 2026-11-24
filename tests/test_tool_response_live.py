@@ -63,11 +63,16 @@ def test_reply_conversion_does_not_repair_calls():
     assert from_chat({"content": "done"}) == {"content": "done", "calls": []}
 
 
-@pytest.mark.parametrize(("options", "conditions"), [
-    ([], ["prompt_only", "receipt_gate"]),
-    (["--condition", "no_gate"], ["no_gate"]),
+@pytest.mark.parametrize(("options", "conditions", "fixtures"), [
+    ([], ["prompt_only", "receipt_gate"], ["attack", "benign"]),
+    (["--condition", "no_gate"], ["no_gate"], ["attack", "benign"]),
+    (
+        ["--condition", "no_gate", "--condition", "receipt_gate", "--fixture", "receipt_reuse"],
+        ["no_gate", "receipt_gate"],
+        ["receipt_reuse"],
+    ),
 ])
-def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions):
+def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions, fixtures):
     output = tmp_path / "run.json"
     monkeypatch.setattr(sys, "argv", ["live", "--model", "stub", "--seeds", "1", "--output", str(output), *options])
     monkeypatch.setattr(live, "sandbox_available", lambda: True)
@@ -79,7 +84,7 @@ def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions):
     monkeypatch.setattr(live, "ollama_factory", lambda *a, **kw: lambda: no_calls)
     assert live.main() == 0
     report = json.loads(output.read_text())
-    expected = [(c, f, 1) for c in conditions for f in ("attack", "benign")]
+    expected = [(c, f, 1) for c in conditions for f in fixtures]
     for rows in (report["runs"], report["summary"]):
         assert [(r["condition"], r["fixture"], r["seed"]) for r in rows] == expected
     assert EXPECTED_PROMPTS["no_gate"][0] != EXPECTED_PROMPTS["prompt_only"][0]

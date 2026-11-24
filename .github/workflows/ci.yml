@@ -45,3 +45,6 @@ jobs:
 
       - name: Run 7-step end-to-end NLIP Type-3 demo
         run: python demo.py
+
+      - name: Run live HTTP NLIP server + MCP stdio + PreToolUse hook demo
+        run: python demo.py --http
