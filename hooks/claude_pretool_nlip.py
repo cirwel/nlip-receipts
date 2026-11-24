@@ -528,13 +528,16 @@ def _scan_double_quoted(
 
 def _confirmed_dparen_end(command: str, open_idx: int) -> int | None:
     """Return index after closing `))` iff `command[open_idx:open_idx+2] == '(('` forms a matched
-    single-line bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` (nested subshells)."""
+    bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` (nested subshells). Fails closed
+    on multi-line `(( ... ))` spans containing `<<` so neither bash arithmetic nor POSIX `/bin/sh`
+    subshell parsing can smuggle a heredoc."""
     try:
         end = _scan_arith_expr(command, open_idx + 2, [])
     except ValueError:
         return None
-    if "\n" in command[open_idx:end]:
-        return None
+    span = command[open_idx:end]
+    if "\n" in span and "<<" in span:
+        raise ValueError("ambiguous multi-line ((...)) span containing <<")
     return end
 
 
