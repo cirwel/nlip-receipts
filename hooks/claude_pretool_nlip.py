@@ -252,25 +252,25 @@ def _scan_backtick(
 
 
 class _NotDparenError(ValueError):
-    """Raised when `((` closes with a single `)` (valid nested subshell, not `(( ... ))`)."""
+    """Raised at the probed `start_after_open_parens` frame when `((` closes with a single `)`."""
+
+    def __init__(self, origin_idx: int) -> None:
+        super().__init__("single ')' after '((' — nested subshell")
+        self.origin_idx = origin_idx
 
 
-def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[str]) -> int:
+def _scan_arith_expr(
+    command: str, start_after_open_parens: int, subs_out: list[str], *, probe: bool = False
+) -> int:
     """Scan inside `$(( ... ))` or `(( ... ))` starting after `((` up to the matching `))`.
-    Treats `<<` as bitwise left-shift while still extracting nested `$(...)`, `${...}`, and backticks.
+    Bash arithmetic does not treat `#` as a comment. Treats `<<` as bitwise left-shift while still
+    extracting nested `$(...)`, `${...}`, and backticks.
     """
     j = start_after_open_parens
     n = len(command)
     paren_depth = 0
     while j < n:
         c = command[j]
-        if c == "#" and (
-            j == start_after_open_parens
-            or command[j - 1] in (" ", "\t", "\r", "\n", ";", "&", "|", "(", ")")
-        ):
-            while j < n and command[j] != "\n":
-                j += 1
-            continue
         if c == "\\":
             if j + 1 >= n:
                 raise ValueError("trailing backslash in arithmetic expression")
@@ -279,11 +279,8 @@ def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[
         if c == "$" and j + 1 < n and command[j + 1] == "'":
             _, j = _scan_ansi_c_quote(command, j + 2)
             continue
-        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
-            j = _scan_arith_expr(command, j + 3, subs_out)
-            continue
         if c == "$" and j + 1 < n and command[j + 1] == "(":
-            _, j = _scan_dollar_paren(command, j, subs_out)
+            _, j = _scan_dollar_arith_or_paren(command, j, subs_out)
             continue
         if c == "$" and j + 1 < n and command[j + 1] == "{":
             _, j = _scan_dollar_brace(command, j, subs_out)
@@ -308,12 +305,31 @@ def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[
             if paren_depth == 0:
                 if j + 1 < n and command[j + 1] == ")":
                     return j + 2
-                raise _NotDparenError("single ')' after '((' — nested subshell")
+                if probe:
+                    raise _NotDparenError(start_after_open_parens)
+                raise ValueError("unbalanced ')' in arithmetic expression")
             paren_depth -= 1
             j += 1
             continue
         j += 1
     raise ValueError("unclosed arithmetic expression")
+
+
+def _scan_dollar_arith_or_paren(
+    command: str, dollar_idx: int, subs_out: list[str]
+) -> tuple[str, int]:
+    """Scan `$((...))` arithmetic expansion when closed by `))`, else fall back to `$(...)`
+    command substitution (matching bash's `$((cmd);)` disambiguation without leaking `_NotDparenError`)."""
+    if dollar_idx + 2 < len(command) and command[dollar_idx : dollar_idx + 3] == "$((":
+        cand: list[str] = []
+        try:
+            end = _scan_arith_expr(command, dollar_idx + 3, cand, probe=True)
+            subs_out.extend(cand)
+            return command[dollar_idx:end], end
+        except _NotDparenError as exc:
+            if exc.origin_idx != dollar_idx + 3:
+                raise ValueError("nested dparen mismatch") from exc
+    return _scan_dollar_paren(command, dollar_idx, subs_out)
 
 
 def _scan_dollar_brace(
@@ -334,11 +350,8 @@ def _scan_dollar_brace(
         if not in_double and c == "$" and j + 1 < n and command[j + 1] == "'":
             _, j = _scan_ansi_c_quote(command, j + 2)
             continue
-        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
-            j = _scan_arith_expr(command, j + 3, subs_out)
-            continue
         if c == "$" and j + 1 < n and command[j + 1] == "(":
-            _, j = _scan_dollar_paren(command, j, subs_out)
+            _, j = _scan_dollar_arith_or_paren(command, j, subs_out)
             continue
         if c == "$" and j + 1 < n and command[j + 1] == "{":
             _, j = _scan_dollar_brace(command, j, subs_out, in_double=in_double)
@@ -441,11 +454,8 @@ def _scan_unquoted_heredoc_subs(body: str, subs_out: list[str]) -> None:
         if ch == "\\" and i + 1 < n:
             i += 2
             continue
-        if ch == "$" and i + 2 < n and body[i : i + 3] == "$((":
-            i = _scan_arith_expr(body, i + 3, subs_out)
-            continue
         if ch == "$" and i + 1 < n and body[i + 1] == "(":
-            _, i = _scan_dollar_paren(body, i, subs_out)
+            _, i = _scan_dollar_arith_or_paren(body, i, subs_out)
             continue
         if ch == "$" and i + 1 < n and body[i + 1] == "{":
             _, i = _scan_dollar_brace(body, i, subs_out)
@@ -516,13 +526,8 @@ def _scan_double_quoted(
             out.append(ch)
             i += 1
             continue
-        if ch == "$" and i + 2 < n and command[i : i + 3] == "$((":
-            end_a = _scan_arith_expr(command, i + 3, subs_out)
-            out.append(command[i:end_a])
-            i = end_a
-            continue
         if ch == "$" and i + 1 < n and command[i + 1] == "(":
-            raw_sub, i = _scan_dollar_paren(command, i, subs_out)
+            raw_sub, i = _scan_dollar_arith_or_paren(command, i, subs_out)
             out.append(raw_sub)
             continue
         if ch == "$" and i + 1 < n and command[i + 1] == "{":
@@ -542,12 +547,14 @@ def _scan_double_quoted(
 
 def _confirmed_dparen_end(command: str, open_idx: int) -> int | None:
     """Return index after closing `))` iff `command[open_idx:open_idx+2] == '(('` forms a matched
-    bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` on `_NotDparenError` (nested
-    subshells). Propagates any inner syntax/ambiguous-span `ValueError` so callers fail closed."""
+    bash arithmetic `(( ... ))` span (`parse_dparen`); else `None` on same-frame `_NotDparenError`
+    (nested subshells). Propagates any inner syntax/ambiguous-span `ValueError` so callers fail closed."""
     try:
-        end = _scan_arith_expr(command, open_idx + 2, [])
-    except _NotDparenError:
-        return None
+        end = _scan_arith_expr(command, open_idx + 2, [], probe=True)
+    except _NotDparenError as exc:
+        if exc.origin_idx == open_idx + 2:
+            return None
+        raise ValueError("nested dparen mismatch") from exc
     span = command[open_idx:end]
     if "\n" in span and "<<" in span:
         raise ValueError("ambiguous multi-line ((...)) span containing <<")
@@ -620,7 +627,7 @@ def _scan_dollar_paren(
             if pending_heredocs:
                 j, _ = _consume_heredocs(command, j, pending_heredocs, subs_out)
             continue
-        if c == "#":
+        if c == "#" and j >= arith_until:
             if j == dollar_idx + 2 or command[j - 1] in (
                 " ",
                 "\t",
@@ -646,12 +653,8 @@ def _scan_dollar_paren(
             _, j = _scan_ansi_c_quote(command, j + 2)
             at_cmd_pos = False
             continue
-        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
-            j = _scan_arith_expr(command, j + 3, subs_out)
-            at_cmd_pos = False
-            continue
         if c == "$" and j + 1 < n and command[j + 1] == "(":
-            _, j = _scan_dollar_paren(command, j, subs_out)
+            _, j = _scan_dollar_arith_or_paren(command, j, subs_out)
             at_cmd_pos = False
             continue
         if c == "$" and j + 1 < n and command[j + 1] == "{":
@@ -808,7 +811,7 @@ def _tokenize_shell(
                 i += 1
             skip_next_word = True
             continue
-        if ch == "#" and not word_open:
+        if ch == "#" and not word_open and i >= arith_until:
             flush_segment()
             while i < n and command[i] != "\n":
                 i += 1
@@ -823,15 +826,9 @@ def _tokenize_shell(
             decoded, i = _scan_double_quoted(command, i + 2, subs)
             buf.append(decoded)
             continue
-        if ch == "$" and i + 2 < n and command[i : i + 3] == "$((":
-            word_open = True
-            end_a = _scan_arith_expr(command, i + 3, subs)
-            buf.append(command[i:end_a])
-            i = end_a
-            continue
         if ch == "$" and i + 1 < n and command[i + 1] == "(":
             word_open = True
-            raw_sub, i = _scan_dollar_paren(command, i, subs)
+            raw_sub, i = _scan_dollar_arith_or_paren(command, i, subs)
             buf.append(raw_sub)
             continue
         if ch == "$" and i + 1 < n and command[i + 1] == "{":
