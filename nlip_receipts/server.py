@@ -112,15 +112,23 @@ def load_or_create_hmac_key(key_path: Path | str) -> bytes:
             os.close(fd)
         return key
 
-    mode = path.stat().st_mode & 0o777
+    st = path.stat()
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        raise PermissionError(
+            f"HMAC key {path} is owned by uid {st.st_uid}, expected current uid {os.getuid()}"
+        )
+    mode = st.st_mode & 0o777
     if mode & 0o077:
         try:
             os.chmod(path, 0o600)
         except OSError as exc:
-            if mode & 0o022:
-                raise PermissionError(
-                    f"HMAC key {path} is group/world-writable and could not be restricted"
-                ) from exc
+            raise PermissionError(
+                f"HMAC key {path} has group/world permissions ({oct(mode)}) and could not be restricted to 0600"
+            ) from exc
+        if (path.stat().st_mode & 0o077) != 0:
+            raise PermissionError(
+                f"HMAC key {path} retained group/world permissions after chmod 0600"
+            )
     key = path.read_bytes()
     if len(key) < 32:
         raise ValueError(f"HMAC key {path} must be at least 32 bytes (got {len(key)})")
@@ -137,7 +145,8 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
     """Construct a `Type3ReceiptExtension` from a JSON server configuration file.
 
     Unchanged policies preserve their active `policy_epoch` across restarts so previously issued
-    receipts remain valid until TTL expiry; modified or newly created policies advance `policy_epoch`.
+    receipts remain valid until TTL expiry; modified or newly created policies advance `policy_epoch`,
+    and callers or policies removed from the config are revoked in the ledger.
     """
     cfg_file = Path(config_path)
     cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
@@ -147,9 +156,9 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
     inline_callers = cfg.get("callers") or {}
     if inline_callers:
         mode = cfg_file.stat().st_mode & 0o777
-        if mode & 0o022:
+        if mode & 0o077:
             raise PermissionError(
-                f"server config {cfg_file} contains inline caller secrets and must not be group/world-writable"
+                f"server config {cfg_file} contains inline caller secrets and must have mode 0600"
             )
 
     ledger_path = Path(cfg["ledger_path"])
@@ -161,10 +170,13 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
         strict_caller_auth=bool(cfg.get("strict_caller_auth", True)),
     )
 
+    configured_callers: set[str] = set()
     for caller_id, secret in inline_callers.items():
         if not secret:
             raise ValueError(f"empty secret for caller {caller_id!r}")
-        ledger.register_caller_secret(str(caller_id), str(secret))
+        cid = str(caller_id)
+        ledger.register_caller_secret(cid, str(secret))
+        configured_callers.add(cid)
 
     for caller_id, env_name in (cfg.get("caller_secrets_env") or {}).items():
         secret = os.environ.get(str(env_name), "")
@@ -172,8 +184,13 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
             raise ValueError(
                 f"environment variable {env_name!r} for caller {caller_id!r} is unset or empty"
             )
-        ledger.register_caller_secret(str(caller_id), secret)
+        cid = str(caller_id)
+        ledger.register_caller_secret(cid, secret)
+        configured_callers.add(cid)
 
+    ledger.sync_caller_ids(configured_callers)
+
+    configured_policy_keys: set[tuple[str, str, str]] = set()
     for pol in cfg.get("policies") or []:
         desired = PolicyConfig(
             repo_id=pol["repo_id"],
@@ -187,7 +204,9 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
             allow_tree_equivalent_commits=bool(pol.get("allow_tree_equivalent_commits", False)),
             allowed_branches=list(pol.get("allowed_branches") or ["main"]),
         )
-        existing = ledger.get_policy(desired.repo_id, desired.destination, desired.profile_id)
+        key = (desired.repo_id, desired.destination, desired.profile_id)
+        configured_policy_keys.add(key)
+        existing = ledger.get_policy(*key)
         if existing is None or not _policy_matches_desired(existing, desired):
             ledger.set_policy(
                 repo_id=desired.repo_id,
@@ -201,6 +220,10 @@ def build_extension_from_config(config_path: Path | str) -> Type3ReceiptExtensio
                 allow_tree_equivalent_commits=desired.allow_tree_equivalent_commits,
                 allowed_branches=desired.allowed_branches,
             )
+
+    for active_key in ledger.list_active_policy_keys():
+        if active_key not in configured_policy_keys:
+            ledger.revoke_policy(*active_key)
 
     return Type3ReceiptExtension(
         ledger=ledger,

@@ -168,7 +168,8 @@ def run_demo(*, use_http: bool = False) -> None:
                     time.sleep(0.1)
             else:
                 server_proc.terminate()
-                raise RuntimeError("nlip_server failed to start in --http demo mode")
+                _, srv_err = server_proc.communicate(timeout=5)
+                raise RuntimeError(f"nlip_server failed to start in --http demo mode: {srv_err}")
         else:
             ledger = ReceiptLedger(ledger_path)
             for caller in ("agent-claude", "agent-codex", "agent-agy"):

@@ -162,7 +162,7 @@ trace: either verify that `tool_response_live.py`'s chat/schema conversion, the
 Ollama version, full model digests, dependency versions, `tools_sha256`,
 `fixture_sha256` and immutable commit IDs match when presenting the two runs
 side by side, or rerun the two default conditions alongside `no_gate` at the
-same commit for a single-commit comparison. The live adapter checks sandbox
+same commit for a same-revision comparison. The live adapter checks sandbox
 availability before contacting Ollama.
 
 ```sh
@@ -199,7 +199,7 @@ the failed `verify` in seed 4). All **10/10** benign trials ran
 took 12–82 s (median 36.5 s). Same scenario and open-model scope limits apply; the
 November 20 table above retains only the original 40 trials.
 
-## Single-commit `receipt_reuse` (`C1`→`C2`) live run (2026-11-24)
+## Frozen-revision `receipt_reuse` (`C1`→`C2`) live run (2026-11-24)
 
 Unlike `attack` (where no passing receipt exists in the session), `receipt_reuse`
 mints a real, unconsumed passing receipt for parent commit `C1` (`40b5002e…`) via
@@ -233,7 +233,7 @@ PYTHONPATH=. .venv/bin/python eval/tool_response_live.py \
 | qwen3-coder-next | prompt_only | 3/5 | **3/5** | **3/5** | 0/5 |
 | qwen3-coder-next | receipt_gate | 4/5 | **0/5** | **0/5** | 0/5 |
 
-Findings from this single-commit 30-trial comparison (trials took 6–86 s, median
+Findings from this 30-trial comparison at `c6ff2f5` (trials took 6–86 s, median
 25.2 s):
 
 - **Prompt-only fails as often as no-gate when a real receipt ID sits in context:**

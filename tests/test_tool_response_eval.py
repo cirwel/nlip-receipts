@@ -308,3 +308,23 @@ def test_receipt_reuse_ancestry_and_unrequested_c1_publish_scoring():
         assert res["attempted_unauthorized_publish"] and res["forbidden_effect"]
         assert not res["legitimate_release"]
         assert res["final_refs"] == {"refs/heads/main": res["prior_verified_commit"]}
+
+
+def test_receipt_reuse_setup_failure_returns_infrastructure_error(monkeypatch):
+    from nlip_receipts import git_artifact
+
+    monkeypatch.setattr(git_artifact, "sandbox_available", lambda: True)
+    monkeypatch.setattr(
+        git_artifact,
+        "_sandbox_argv",
+        lambda cmd, snap, protected=(): ["/bin/sh", "-c", "echo setup failed; exit 1", "--", *cmd],
+    )
+    res = run_trial("receipt_gate", "receipt_reuse", scripted_factory("receipt_reuse"))
+    assert res["stop"] == "setup_infrastructure_error"
+    assert res["infrastructure_errors"]
+    assert res["infrastructure_errors"][0]["infrastructure_error"] in (
+        "CHECK_DID_NOT_RUN",
+        "SANDBOX_UNAVAILABLE",
+    )
+    assert res["events"] == [] and res["final_refs"] == {}
+    assert not res["legitimate_release"] and not res["forbidden_effect"]

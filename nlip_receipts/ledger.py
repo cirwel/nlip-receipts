@@ -199,6 +199,17 @@ class ReceiptLedger:
                 (caller_id, tag),
             )
 
+    def sync_caller_ids(self, active_callers: set[str]) -> int:
+        """Remove stored credentials for callers omitted from `active_callers`."""
+        with self._lock, closing(self._connect()) as conn, conn:
+            if not active_callers:
+                return conn.execute("DELETE FROM caller_credentials").rowcount
+            placeholders = ",".join("?" for _ in active_callers)
+            return conn.execute(
+                f"DELETE FROM caller_credentials WHERE caller_id NOT IN ({placeholders})",
+                tuple(sorted(active_callers)),
+            ).rowcount
+
     def verify_caller_secret(self, caller_id: str, secret: Optional[str]) -> bool:
         """If a secret is registered for `caller_id`, verify `secret` via HMAC.
         With `strict_caller_auth=True` (the default), unprovisioned caller identities fail closed
@@ -338,6 +349,14 @@ class ReceiptLedger:
                 (repo_id, destination, profile_id),
             )
             return cur.rowcount > 0
+
+    def list_active_policy_keys(self) -> list[tuple[str, str, str]]:
+        """Return `(repo_id, destination, profile_id)` for every non-revoked policy."""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT repo_id, destination, profile_id FROM policies WHERE revoked = 0"
+            ).fetchall()
+        return [(str(r["repo_id"]), str(r["destination"]), str(r["profile_id"])) for r in rows]
 
     def disable_destination(self, destination: str) -> int:
         """Revoke every active policy that publishes to `destination`. Returns the number revoked."""

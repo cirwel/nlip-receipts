@@ -20,6 +20,7 @@ from .adapters import NLIPTransportError, extract_decision_from_response, http_n
 from .schemas import ToolCallProposal, pack_tool_call_message
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+SUPPORTED_MCP_VERSIONS = ("2024-11-05", "2025-03-26")
 
 MCP_TOOLS: list[dict[str, Any]] = [
     {
@@ -189,14 +190,13 @@ def handle_jsonrpc_message(
 
     params = req.get("params") or {}
     if method == "initialize":
-        requested_version = (
-            params.get("protocolVersion") if isinstance(params, dict) else None
-        ) or MCP_PROTOCOL_VERSION
+        requested = params.get("protocolVersion") if isinstance(params, dict) else None
+        negotiated = requested if requested in SUPPORTED_MCP_VERSIONS else MCP_PROTOCOL_VERSION
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": requested_version,
+                "protocolVersion": negotiated,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "nlip-receipts-mcp", "version": "0.1.0"},
             },

@@ -25,7 +25,12 @@ from nlip_receipts.adapters import (
     http_nlip_transport,
 )
 from nlip_receipts.git_artifact import resolve_commit_and_tree, run_git
-from nlip_receipts.server import build_extension_from_config, create_nlip_receipt_server, main as server_main
+from nlip_receipts.server import (
+    build_extension_from_config,
+    create_nlip_receipt_server,
+    load_or_create_hmac_key,
+    main as server_main,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK_SCRIPT = REPO_ROOT / "hooks" / "claude_pretool_nlip.py"
@@ -512,6 +517,12 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}}
             )
             assert init_rsp["result"]["serverInfo"]["name"] == "nlip-receipts-mcp"
+            assert init_rsp["result"]["protocolVersion"] == "2024-11-05"
+
+            fallback_init = rpc(
+                {"jsonrpc": "2.0", "id": 10, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}}
+            )
+            assert fallback_init["result"]["protocolVersion"] == "2024-11-05"
 
             # Notification produces no response
             mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
@@ -598,40 +609,70 @@ def test_mcp_stdio_bridge_over_live_http_server(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("stdin_payload", "expected_decision"),
+    ("stdin_payload", "expected_decision", "extra_env"),
     [
         # Fail-closed malformed inputs
-        ("", "deny"),
-        ("{not-json", "deny"),
-        ("[]", "deny"),
-        (json.dumps({"tool_name": "Bash"}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 123}}), "deny"),
-        (json.dumps({"tool_name": "Write", "tool_input": {}}), "deny"),
-        # Blocked Bash direct-publish vectors
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git -C /tmp/r -c a=b push staging HEAD:main"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q && git --git-dir=/tmp/r push"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sh -c 'git -C repo push origin main'"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo $(git push origin main)"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git send-pack /tmp/dest HEAD"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 12 --merge"}}), "deny"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh api -X PUT repos/o/r/pulls/1/merges"}}), "deny"),
-        # Blocked protected config/hook writes
-        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".claude/settings.json"}}), "deny"),
-        (json.dumps({"cwd": "/repo", "tool_name": "Edit", "tool_input": {"file_path": "hooks/claude_pretool_nlip.py"}}), "deny"),
-        (json.dumps({"cwd": "/repo", "tool_name": "MultiEdit", "tool_input": {"edits": [{"file_path": ".git/config"}]}}), "deny"),
-        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".git/hooks/pre-push"}}), "deny"),
-        # Allowed normal operations (including commit message mentioning "git push" and MCP tools)
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'git commit -m "fix git push bug"'}}), "allow"),
-        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q"}}), "allow"),
-        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}), "allow"),
-        (json.dumps({"tool_name": "mcp__nlip__nlip_verify", "tool_input": {"repo_id": "svc"}}), "allow"),
-        (json.dumps({"tool_name": "mcp__nlip__nlip_publish", "tool_input": {"repo_id": "svc"}}), "allow"),
+        ("", "deny", None),
+        ("{not-json", "deny", None),
+        ("[]", "deny", None),
+        (json.dumps({"tool_name": "Bash"}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 123}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo 'unclosed"}}), "deny", None),
+        (json.dumps({"tool_name": "Write", "tool_input": {}}), "deny", None),
+        # Blocked Bash direct-publish vectors (including newlines, mid-word #, continuations, wrappers)
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q\ngit push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo a#; git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git \\\npush origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git -C /tmp/r -c a=b push staging HEAD:main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q && git --git-dir=/tmp/r push"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "/usr/bin/env FOO=1 git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sudo -u root git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "command git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "nohup git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "exec git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "time git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "nice -n 5 git push origin main"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "xargs git push"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "{ git push origin main; }"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "if true; then git push origin main; fi"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "sh -c 'git -C repo push origin main'"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo $(git push origin main)"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "git send-pack /tmp/dest HEAD"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 12 --merge"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh api -X PUT repos/o/r/pulls/1/merge"}}), "deny", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh api -X POST repos/o/r/merges"}}), "deny", None),
+        # Blocked protected config/hook writes (including $CLAUDE_PROJECT_DIR, ../hooks, APFS case, worktrees)
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".claude/settings.json"}}), "deny", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".CLAUDE/settings.json"}}), "deny", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Edit", "tool_input": {"file_path": "hooks/claude_pretool_nlip.py"}}), "deny", None),
+        (
+            json.dumps({"cwd": "/proj/sub", "tool_name": "Edit", "tool_input": {"file_path": "../hooks/claude_pretool_nlip.py"}}),
+            "deny",
+            {"CLAUDE_PROJECT_DIR": "/proj"},
+        ),
+        (
+            json.dumps({"cwd": "/tmp", "tool_name": "Write", "tool_input": {"file_path": "/proj/hooks/guard.py"}}),
+            "deny",
+            {"CLAUDE_PROJECT_DIR": "/proj"},
+        ),
+        (json.dumps({"cwd": "/repo", "tool_name": "MultiEdit", "tool_input": {"edits": [{"file_path": ".git/config"}]}}), "deny", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".git/hooks/pre-push"}}), "deny", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".git/worktrees/wt1/config"}}), "deny", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": ".git/worktrees/wt1/hooks/pre-push"}}), "deny", None),
+        # Allowed normal operations emit empty stdout ("silent") so Claude Code prompts normally
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": 'git commit -m "fix git push bug"'}}), "silent", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "# git push comment\npytest -q"}}), "silent", None),
+        (json.dumps({"tool_name": "Bash", "tool_input": {"command": "pytest -q"}}), "silent", None),
+        (json.dumps({"cwd": "/repo", "tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}), "silent", None),
+        (json.dumps({"tool_name": "mcp__nlip__nlip_verify", "tool_input": {"repo_id": "svc"}}), "silent", None),
+        (json.dumps({"tool_name": "mcp__nlip__nlip_publish", "tool_input": {"repo_id": "svc"}}), "silent", None),
     ],
 )
 def test_claude_pretool_hook_fails_closed_and_guards_bypasses(
-    stdin_payload: str, expected_decision: str
+    stdin_payload: str, expected_decision: str, extra_env: dict[str, str] | None
 ) -> None:
+    env = {**os.environ, **(extra_env or {})}
     proc = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
         input=stdin_payload,
@@ -639,11 +680,171 @@ def test_claude_pretool_hook_fails_closed_and_guards_bypasses(
         text=True,
         timeout=5,
         check=False,
+        env=env,
     )
     assert proc.returncode == 0, f"hook must exit 0 (got {proc.returncode}): {proc.stderr}"
+    if expected_decision == "silent":
+        assert proc.stdout == "", f"deny-only hook must stay silent when not blocking: {proc.stdout!r}"
+        return
     body = json.loads(proc.stdout)
     assert set(body) == {"hookSpecificOutput"}
     hso = body["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == expected_decision
     assert isinstance(hso["permissionDecisionReason"], str) and hso["permissionDecisionReason"]
+
+
+def test_server_config_removal_revokes_callers_and_policies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_CLAUDE_SECRET", "sec-claude")
+    monkeypatch.setenv("TEST_CODEX_SECRET", "sec-codex")
+    monkeypatch.setenv("TEST_AGY_SECRET", "sec-agy")
+
+    se_dir = tmp_path / "se"
+    se_dir.mkdir()
+    work, dest, c1, _ = _init_sample_repo(tmp_path)
+    cfg_path = se_dir / "server.json"
+    cfg = {
+        "ledger_path": str(se_dir / "ledger.db"),
+        "repos": {"svc": str(work)},
+        "destinations": {"staging": str(dest)},
+        "caller_secrets_env": {
+            "agent-claude": "TEST_CLAUDE_SECRET",
+            "agent-codex": "TEST_CODEX_SECRET",
+        },
+        "policies": [
+            {
+                "repo_id": "svc",
+                "destination": "staging",
+                "profile_id": "unit",
+                "command": [sys.executable, "check.py"],
+                "allowed_callers": ["agent-claude", "agent-codex"],
+                "allowed_branches": ["main"],
+                "ttl_seconds": 600.0,
+                "single_use": True,
+            },
+            {
+                "repo_id": "svc",
+                "destination": "staging",
+                "profile_id": "canary",
+                "command": [sys.executable, "check.py"],
+                "allowed_callers": ["agent-claude"],
+                "allowed_branches": ["main"],
+                "ttl_seconds": 600.0,
+                "single_use": True,
+            },
+        ],
+    }
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    os.chmod(cfg_path, 0o600)
+
+    ext1 = build_extension_from_config(cfg_path)
+    _, canary_rcpt = extract_decision_from_response(
+        ext1.handle_nlip_message(
+            pack_tool_call_message(
+                ToolCallProposal(
+                    operation="verify",
+                    repo_id="svc",
+                    artifact_ref=c1,
+                    destination="staging",
+                    profile_id="canary",
+                ),
+                auth_token="agent-claude:sec-claude",
+            )
+        )
+    )
+    assert canary_rcpt is not None
+
+    # Remove agent-codex AND the canary policy from config and rebuild.
+    cfg["caller_secrets_env"] = {"agent-claude": "TEST_CLAUDE_SECRET"}
+    cfg["policies"] = [cfg["policies"][0]]
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    ext2 = build_extension_from_config(cfg_path)
+
+    dec_removed_caller, _ = extract_decision_from_response(
+        ext2.handle_nlip_message(
+            pack_tool_call_message(
+                ToolCallProposal(
+                    operation="verify",
+                    repo_id="svc",
+                    artifact_ref=c1,
+                    destination="staging",
+                    profile_id="unit",
+                ),
+                auth_token="agent-codex:sec-codex",
+            )
+        )
+    )
+    assert dec_removed_caller.action == "deny"
+    assert dec_removed_caller.reason_code == "CALLER_AUTH_INVALID"
+
+    dec_removed_policy, _ = extract_decision_from_response(
+        ext2.handle_nlip_message(
+            pack_tool_call_message(
+                ToolCallProposal(
+                    operation="publish",
+                    repo_id="svc",
+                    artifact_ref=c1,
+                    destination="staging",
+                    branch="main",
+                    profile_id="canary",
+                    receipt_id=canary_rcpt.receipt_id,
+                ),
+                auth_token="agent-claude:sec-claude",
+            )
+        )
+    )
+    assert dec_removed_policy.action == "deny"
+    assert dec_removed_policy.reason_code == "POLICY_NOT_FOUND"
+
+
+def test_load_or_create_hmac_key_enforces_mode_owner_and_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_path = tmp_path / "ledger.hmac"
+    key = load_or_create_hmac_key(key_path)
+    assert len(key) == 32
+    assert (key_path.stat().st_mode & 0o777) == 0o600
+
+    # Group/world-readable key is tightened to 0600 on load when chmod succeeds.
+    os.chmod(key_path, 0o644)
+    assert load_or_create_hmac_key(key_path) == key
+    assert (key_path.stat().st_mode & 0o777) == 0o600
+
+    # Group/world-readable key fails closed if chmod raises OSError.
+    os.chmod(key_path, 0o644)
+    def _fail_chmod(_p: Any, _m: int) -> None:
+        raise OSError("chmod denied")
+
+    monkeypatch.setattr(os, "chmod", _fail_chmod)
+    with pytest.raises(PermissionError, match="0600"):
+        load_or_create_hmac_key(key_path)
+    monkeypatch.undo()
+    os.chmod(key_path, 0o600)
+
+    # Short (<32-byte) key is rejected.
+    short_path = tmp_path / "short.hmac"
+    short_path.write_bytes(b"x" * 16)
+    os.chmod(short_path, 0o600)
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        load_or_create_hmac_key(short_path)
+
+    # Inline-secret config with group/world-readable permissions is rejected.
+    work, dest, _, _ = _init_sample_repo(tmp_path)
+    inline_cfg = tmp_path / "inline.json"
+    inline_cfg.write_text(
+        json.dumps(
+            {
+                "ledger_path": str(tmp_path / "l.db"),
+                "repos": {"svc": str(work)},
+                "destinations": {"staging": str(dest)},
+                "callers": {"agent-a": "inline-secret"},
+                "policies": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inline_cfg, 0o644)
+    with pytest.raises(PermissionError, match="0600"):
+        build_extension_from_config(inline_cfg)
