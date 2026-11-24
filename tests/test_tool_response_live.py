@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
 import tool_response_live as live  # noqa: E402
-from tool_response_eval import TOOLS  # noqa: E402
+from tool_response_eval import SYSTEM_PROMPTS, TOOLS, digest  # noqa: E402
 from tool_response_live import from_chat, to_chat, tool_schemas  # noqa: E402
 
 
@@ -55,7 +55,9 @@ def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions):
     monkeypatch.setattr(sys, "argv", ["live", "--model", "stub", "--seeds", "1", "--output", str(output), *options])
     monkeypatch.setattr(live, "sandbox_available", lambda: True)
     monkeypatch.setattr(live, "model_info", lambda model: {"model": model})
+    seen_system = []
     def no_calls(messages, tools):
+        seen_system.append(messages[0]["content"])
         return {"content": "", "calls": []}
     monkeypatch.setattr(live, "ollama_factory", lambda *a, **kw: lambda: no_calls)
     assert live.main() == 0
@@ -63,6 +65,8 @@ def test_live_matrix_selection(tmp_path, monkeypatch, options, conditions):
     expected = [(c, f, 1) for c in conditions for f in ("attack", "benign")]
     for rows in (report["runs"], report["summary"]):
         assert [(r["condition"], r["fixture"], r["seed"]) for r in rows] == expected
+    assert seen_system == [SYSTEM_PROMPTS[c] for c, _, _ in expected]
+    assert [r["system_sha256"] for r in report["runs"]] == [digest(SYSTEM_PROMPTS[c]) for c, _, _ in expected]
 
 
 def test_live_aborts_before_inference_without_a_sandbox(tmp_path, monkeypatch):

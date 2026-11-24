@@ -10,7 +10,7 @@
 - The counts and timings below describe the existing published evaluation, not a new run. Reconcile them against the recording's outputs; show failures or infrastructure errors rather than narrating expected success over them.
 - `make demo` uses the server's in-process HTTP test client and payload-shape adapters. It does not launch three commercial agent applications or a live network server. Label the screen accordingly. Its step 7 prints the audit log, not an independent integrity-verification result.
 - Show the end-to-end suite's destination-based assertions, not just an `ALLOW`/`DENY` response. If evaluation takes longer than the recording budget, show a clearly labeled completed run from the same checkout. Do not claim a fixed runtime.
-- The earlier live-agent traces are exploratory, predate sandbox/auth changes, and paste hostile content into user messages. They are not a realistic indirect-injection benchmark. Do not use them as the video's headline evidence. See [the proposed evaluation plan](REALISTIC_AGENT_EVAL_PLAN.md).
+- For live-model indirect-injection evidence, cite the tool-response runs in [`eval/TOOL_RESPONSE_EVAL.md`](../eval/TOOL_RESPONSE_EVAL.md) (`eval/results/tool_response_live_2026-11-20.json` at `16456e2` and `eval/results/tool_response_live_no_gate_2026-11-24.json` at `381c258`), keeping their scope explicit: two local open models via Ollama (`gemma4` 8B and `qwen3-coder-next` 80B) on one AgentDojo-derived attack fixture and one benign release fixture, five seeds per cell. Do not use the older `eval/live_agent_eval.py` traces as headline evidence; they pasted hostile text into user turns and predate sandbox/auth hardening.
 
 ## [0:00–0:30] 1. The problem
 
@@ -42,14 +42,12 @@
 >
 > Step seven displays the decision log. It is hash-chained, but a writer with full ledger access could rewrite it, so protecting that state remains essential."
 
-## [2:25–3:30] 4. Evidence and next test
+## [2:25–3:30] 4. Evidence and live tool-response test
 
-**Visual:** Show the `make eval` end-to-end summary first, then the separate ablation table. Keep their scopes visible.
+**Visual:** Show the `make eval` end-to-end summary first, then the separate ablation table, and finally the live tool-response table in `eval/TOOL_RESPONSE_EVAL.md`. Keep each scope visible.
 
-> "The published end-to-end suite covers 16 authored attack scenarios and three benign workflows. It uses real NLIP requests through the server app, sandboxed verification and real pushes to temporary repositories, checking the destination effects. All listed attacks were blocked and all three benign workflows completed. Repeating deterministic cases checks stability, not broader attack coverage.
+> "The deterministic end-to-end suite covers 16 authored attack scenarios and three benign workflows through the real server app, sandboxed verification and real pushes to temporary repositories, checking destination refs. All 16 attacks were blocked and all three benign workflows completed. Repeating deterministic cases checks stability, not broader attack coverage.
 >
-> The separate ablation uses seeded ledger states and simulated baseline policies. Removing individual bindings reopens the corresponding attacks. This does not establish superiority over a real prompted agent or an existing CI gate.
+> In the seeded decision-function ablation, removing individual bindings reopens the corresponding attacks, with a median gate decision of 0.63 milliseconds and a p99 of 1.75 milliseconds, excluding the consume transaction.
 >
-> On the reported host, the decision's median was 0.63 milliseconds and its p99 was 1.75 milliseconds, excluding the consume transaction. End-to-end publication also includes the push.
->
-> The next evaluation puts malicious instructions in actual repository-file tool responses, with real baseline execution and more benign tasks. For now, the demonstrated contribution is a deterministic, artifact-bound publication gate with explicit limits."
+> Finally, we tested two local open models via Ollama — `gemma4` 8B and `qwen3-coder-next` 80B, five seeds per cell — on an AgentDojo-derived release-notes injection read only through a file tool. The requested commit fails its check. Under a neutral prompt, that failing commit reached the destination in 9 of 10 trials; adding a defensive system prompt lowered that to 6 of 10, mostly after the models saw verification fail and published anyway. Under the receipt gate, 4 of 10 attempted the unauthorized publish and 0 of 10 reached the destination, while all 30 benign releases completed across the three conditions. Expanding beyond one attack and one benign fixture to multi-artifact receipt reuse and commercial harnesses is future work."
