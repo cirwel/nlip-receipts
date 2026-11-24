@@ -86,19 +86,17 @@ _WRAPPER_ARG_FLAGS: dict[str, frozenset[str]] = {
             "-d",
             "-E",
             "-a",
-            "--replace",
-            "--max-lines",
             "--max-args",
             "--max-procs",
             "--max-chars",
             "--delimiter",
-            "--eof",
             "--arg-file",
         }
     ),
 }
 _EDIT_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 _FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+_GH_ARG_FLAGS = frozenset({"-R", "--repo", "-H", "--hostname", "-q", "--jq", "-t", "--template"})
 
 _GH_MERGE_API_RE = re.compile(r"(?:^|/)(?:pulls/\d+/merge|merges)(?:$|[?#])")
 _ANSI_C_ESCAPES = {
@@ -253,23 +251,22 @@ def _scan_backtick(
     return command[open_idx : j + 1], j + 1
 
 
-def _scan_dollar_brace(
-    command: str, dollar_idx: int, subs_out: list[str]
-) -> tuple[str, int]:
-    """Scan `${...}` parameter expansion starting at `dollar_idx`, extracting nested substitutions
-    without treating `${a},${b}` as brace expansion."""
-    j = dollar_idx + 2
+def _scan_arith_expr(command: str, start_after_open_parens: int, subs_out: list[str]) -> int:
+    """Scan inside `$(( ... ))` or `(( ... ))` starting after `((` up to the matching `))`.
+    Treats `<<` as bitwise left-shift while still extracting nested `$(...)`, `${...}`, and backticks.
+    """
+    j = start_after_open_parens
     n = len(command)
-    depth = 1
-    while j < n and depth > 0:
+    paren_depth = 0
+    while j < n:
         c = command[j]
         if c == "\\":
             if j + 1 >= n:
-                raise ValueError("trailing backslash in ${...}")
+                raise ValueError("trailing backslash in arithmetic expression")
             j += 2
             continue
-        if c == "$" and j + 1 < n and command[j + 1] == "'":
-            _, j = _scan_ansi_c_quote(command, j + 2)
+        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
+            j = _scan_arith_expr(command, j + 3, subs_out)
             continue
         if c == "$" and j + 1 < n and command[j + 1] == "(":
             _, j = _scan_dollar_paren(command, j, subs_out)
@@ -280,7 +277,7 @@ def _scan_dollar_brace(
         if c == "'":
             end = command.find("'", j + 1)
             if end == -1:
-                raise ValueError("unclosed single quote in ${...}")
+                raise ValueError("unclosed single quote in arithmetic expression")
             j = end + 1
             continue
         if c == '"':
@@ -288,6 +285,61 @@ def _scan_dollar_brace(
             continue
         if c == "`":
             _, j = _scan_backtick(command, j, in_double=False, subs_out=subs_out)
+            continue
+        if c == "(":
+            paren_depth += 1
+            j += 1
+            continue
+        if c == ")":
+            if paren_depth == 0:
+                if j + 1 < n and command[j + 1] == ")":
+                    return j + 2
+                raise ValueError("unbalanced ')' in arithmetic expression")
+            paren_depth -= 1
+            j += 1
+            continue
+        j += 1
+    raise ValueError("unclosed arithmetic expression")
+
+
+def _scan_dollar_brace(
+    command: str, dollar_idx: int, subs_out: list[str], *, in_double: bool = False
+) -> tuple[str, int]:
+    """Scan `${...}` parameter expansion starting at `dollar_idx`, extracting nested substitutions
+    without treating `${a},${b}` as brace expansion. When `in_double=True` (`"${...}"`), `'` is literal."""
+    j = dollar_idx + 2
+    n = len(command)
+    depth = 1
+    while j < n and depth > 0:
+        c = command[j]
+        if c == "\\":
+            if j + 1 >= n:
+                raise ValueError("trailing backslash in ${...}")
+            j += 2
+            continue
+        if not in_double and c == "$" and j + 1 < n and command[j + 1] == "'":
+            _, j = _scan_ansi_c_quote(command, j + 2)
+            continue
+        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
+            j = _scan_arith_expr(command, j + 3, subs_out)
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "(":
+            _, j = _scan_dollar_paren(command, j, subs_out)
+            continue
+        if c == "$" and j + 1 < n and command[j + 1] == "{":
+            _, j = _scan_dollar_brace(command, j, subs_out, in_double=in_double)
+            continue
+        if not in_double and c == "'":
+            end = command.find("'", j + 1)
+            if end == -1:
+                raise ValueError("unclosed single quote in ${...}")
+            j = end + 1
+            continue
+        if c == '"':
+            _, j = _scan_double_quoted(command, j + 1, subs_out)
+            continue
+        if c == "`":
+            _, j = _scan_backtick(command, j, in_double=in_double, subs_out=subs_out)
             continue
         if c == "{":
             depth += 1
@@ -375,6 +427,9 @@ def _scan_unquoted_heredoc_subs(body: str, subs_out: list[str]) -> None:
         if ch == "\\" and i + 1 < n:
             i += 2
             continue
+        if ch == "$" and i + 2 < n and body[i : i + 3] == "$((":
+            i = _scan_arith_expr(body, i + 3, subs_out)
+            continue
         if ch == "$" and i + 1 < n and body[i + 1] == "(":
             _, i = _scan_dollar_paren(body, i, subs_out)
             continue
@@ -447,12 +502,17 @@ def _scan_double_quoted(
             out.append(ch)
             i += 1
             continue
+        if ch == "$" and i + 2 < n and command[i : i + 3] == "$((":
+            end_a = _scan_arith_expr(command, i + 3, subs_out)
+            out.append(command[i:end_a])
+            i = end_a
+            continue
         if ch == "$" and i + 1 < n and command[i + 1] == "(":
             raw_sub, i = _scan_dollar_paren(command, i, subs_out)
             out.append(raw_sub)
             continue
         if ch == "$" and i + 1 < n and command[i + 1] == "{":
-            raw_brace, i = _scan_dollar_brace(command, i, subs_out)
+            raw_brace, i = _scan_dollar_brace(command, i, subs_out, in_double=True)
             out.append(raw_brace)
             continue
         if ch == "`":
@@ -475,6 +535,7 @@ def _scan_dollar_paren(
     n = len(command)
     depth = 1
     case_depth = 0
+    arith_cmd_depth = 0
     at_cmd_pos = True
     cur_word: list[str] = []
     pending_heredocs: list[tuple[str, bool, bool]] = []
@@ -508,12 +569,20 @@ def _scan_dollar_paren(
             j += 1
             continue
         flush_kw()
+        if c == "<" and j + 2 < n and command[j : j + 3] == "<<<":
+            at_cmd_pos = False
+            j += 3
+            continue
         if (
             c == "<"
             and j + 1 < n
             and command[j + 1] == "<"
             and not (j + 2 < n and command[j + 2] == "<")
         ):
+            if arith_cmd_depth > 0:
+                at_cmd_pos = False
+                j += 2
+                continue
             spec, j = _parse_heredoc_op(command, j)
             pending_heredocs.append(spec)
             continue
@@ -549,6 +618,10 @@ def _scan_dollar_paren(
             _, j = _scan_ansi_c_quote(command, j + 2)
             at_cmd_pos = False
             continue
+        if c == "$" and j + 2 < n and command[j : j + 3] == "$((":
+            j = _scan_arith_expr(command, j + 3, subs_out)
+            at_cmd_pos = False
+            continue
         if c == "$" and j + 1 < n and command[j + 1] == "(":
             _, j = _scan_dollar_paren(command, j, subs_out)
             at_cmd_pos = False
@@ -577,11 +650,28 @@ def _scan_dollar_paren(
             j += 1
             continue
         if c == "(":
+            if j + 1 < n and command[j + 1] == "(":
+                arith_cmd_depth += 1
+                depth += 2
+                at_cmd_pos = True
+                j += 2
+                continue
             depth += 1
             at_cmd_pos = True
             j += 1
             continue
         if c == ")":
+            if arith_cmd_depth > 0 and j + 1 < n and command[j + 1] == ")" and depth >= 2:
+                arith_cmd_depth -= 1
+                depth -= 2
+                if depth == 0:
+                    if pending_heredocs:
+                        raise ValueError("unterminated heredoc in $(...)")
+                    subs_out.append(command[dollar_idx + 2 : j])
+                    return command[dollar_idx : j + 1], j + 1
+                at_cmd_pos = False
+                j += 2
+                continue
             if case_depth > 0 and depth == 1:
                 at_cmd_pos = True
                 j += 1
@@ -613,6 +703,7 @@ def _tokenize_shell(
     brace_stack: list[bool] = []  # per open unquoted `{`: True once an unquoted `,` appeared at depth
     has_brace_exp = False
     skip_next_word = False
+    arith_cmd_depth = 0
     pending_heredocs: list[tuple[str, bool, bool]] = []
     line_seg_indices: list[int] = []
     i = 0
@@ -659,6 +750,10 @@ def _tokenize_shell(
             and command[i + 1] == "<"
             and not (i + 2 < n and command[i + 2] == "<")
         ):
+            if arith_cmd_depth > 0:
+                flush_word()
+                i += 2
+                continue
             discard_io_number_or_flush()
             spec, i = _parse_heredoc_op(command, i)
             pending_heredocs.append(spec)
@@ -676,6 +771,16 @@ def _tokenize_shell(
             flush_word()
             i += 3 if (i + 2 < n and command[i + 2] == ">") else 2
             skip_next_word = True
+            continue
+        if ch == "(" and i + 1 < n and command[i + 1] == "(":
+            flush_segment()
+            arith_cmd_depth += 1
+            i += 2
+            continue
+        if ch == ")" and arith_cmd_depth > 0 and i + 1 < n and command[i + 1] == ")":
+            flush_segment()
+            arith_cmd_depth -= 1
+            i += 2
             continue
         if ch in (";", "&", "|", "(", ")"):
             flush_segment()
@@ -705,6 +810,12 @@ def _tokenize_shell(
             word_open = True
             decoded, i = _scan_double_quoted(command, i + 2, subs)
             buf.append(decoded)
+            continue
+        if ch == "$" and i + 2 < n and command[i : i + 3] == "$((":
+            word_open = True
+            end_a = _scan_arith_expr(command, i + 3, subs)
+            buf.append(command[i:end_a])
+            i = end_a
             continue
         if ch == "$" and i + 1 < n and command[i + 1] == "(":
             word_open = True
@@ -868,12 +979,8 @@ def _shell_dash_c_arg(tokens: list[str]) -> str | None:
         if (tok.startswith("-") or tok.startswith("+")) and len(tok) > 1:
             if tok.startswith("-") and "c" in tok[1:]:
                 has_c = True
-            consumed_next = False
-            for k in range(1, len(tok)):
-                if tok[k] in ("o", "O"):
-                    consumed_next = k == len(tok) - 1
-                    break
-            j += 2 if consumed_next else 1
+            o_count = sum(1 for ch in tok[1:] if ch in ("o", "O"))
+            j += 1 + o_count
             continue
         break
     if has_c and j < n:
@@ -881,15 +988,31 @@ def _shell_dash_c_arg(tokens: list[str]) -> str | None:
     return None
 
 
-def _gh_subcommand_limit(tokens: list[str]) -> int:
-    """Return slice upper bound covering `gh` plus its first two non-flag subcommand words."""
-    seen = 0
-    for idx in range(1, len(tokens)):
-        if not tokens[idx].startswith("-"):
-            seen += 1
-            if seen == 2:
-                return idx + 1
-    return len(tokens)
+def _gh_positionals_and_limit(tokens: list[str]) -> tuple[list[str], int]:
+    """Return `(positional_words, subcommand_slice_limit)` for a `gh` invocation, skipping option
+    values for `-R`/`--repo`, `-H`/`--hostname`, `-q`/`--jq`, and `-t`/`--template`."""
+    pos: list[str] = []
+    limit = len(tokens)
+    idx = 1
+    n = len(tokens)
+    after_ddash = False
+    while idx < n:
+        tok = tokens[idx]
+        if not after_ddash and tok == "--":
+            after_ddash = True
+            idx += 1
+            continue
+        if not after_ddash and tok in _GH_ARG_FLAGS:
+            idx += 2
+            continue
+        if not after_ddash and tok.startswith("-"):
+            idx += 1
+            continue
+        pos.append(tok)
+        if len(pos) == 2 and limit == len(tokens):
+            limit = idx + 1
+        idx += 1
+    return pos, limit
 
 
 def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
@@ -981,11 +1104,11 @@ def _check_bash_command(command: str, *, _depth: int = 0) -> str | None:
         elif base in ("git-receive-pack", "git-send-pack"):
             return f"Direct `{base}` is blocked; publish via `nlip_publish`."
         elif base == "gh":
-            non_flags = [t for t in seg[1:] if not t.startswith("-")]
+            non_flags, gh_sub_limit = _gh_positionals_and_limit(seg)
             gh_limit = (
                 len(unwrapped)
                 if (non_flags and non_flags[0] == "api")
-                else _gh_subcommand_limit(seg)
+                else gh_sub_limit
             )
             if any(has_b for _, has_b in unwrapped[:gh_limit]):
                 return (
