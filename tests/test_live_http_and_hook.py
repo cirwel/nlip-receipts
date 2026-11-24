@@ -38,23 +38,42 @@ def _free_port() -> int:
 
 
 def _init_sample_repo(base: Path) -> tuple[Path, Path, str, str]:
+    from nlip_receipts.git_artifact import _safe_git_env
+
+    fixed_env = {
+        **_safe_git_env(),
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+    }
     work = base / "svc"
     work.mkdir()
     dest = base / "staging.git"
     dest.mkdir()
-    run_git(str(dest), "init", "-q", "--bare")
-    run_git(str(work), "init", "-q", "-b", "main")
+    run_git(str(dest), "init", "-q", "--bare", "--template=", "--object-format=sha1")
+    run_git(str(work), "init", "-q", "--template=", "--object-format=sha1", "-b", "main")
     run_git(str(work), "config", "user.email", "test@example.invalid")
     run_git(str(work), "config", "user.name", "Test")
     (work / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
     (work / "check.py").write_text("from app import add\nassert add(2, 3) == 5\n", encoding="utf-8")
     run_git(str(work), "add", ".")
-    run_git(str(work), "commit", "-qm", "C1")
+    subprocess.run(
+        ["git", "-c", f"core.hooksPath={os.devnull}", "-C", str(work), "commit", "-qm", "C1"],
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=fixed_env,
+    )
     c1 = resolve_commit_and_tree(str(work), "HEAD").commit_oid
 
     (work / "app.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
     run_git(str(work), "add", "app.py")
-    run_git(str(work), "commit", "-qm", "C2 broken")
+    subprocess.run(
+        ["git", "-c", f"core.hooksPath={os.devnull}", "-C", str(work), "commit", "-qm", "C2 broken"],
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=fixed_env,
+    )
     c2 = resolve_commit_and_tree(str(work), "HEAD").commit_oid
     return work, dest, c1, c2
 

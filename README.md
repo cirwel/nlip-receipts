@@ -21,7 +21,7 @@ The Focus Area 3 specification requires that a Security Extension *"cannot see t
 - **Sandboxed verification:** the verify command imports code from the untrusted tree, so it runs under `sandbox-exec` (macOS) or `bwrap` (Linux) with no network, no host writes, and no view of the ledger or other repositories. Unix-socket connections are denied on macOS; on Linux only sockets inside the read-only directories the sandbox mounts stay reachable. See [`SECURITY.md`](SECURITY.md#threat-model-and-limitations) for the threat model and the remaining limitation.
 - **Snapshot-isolated verification (`git archive <tree_oid>`):** Verification runs inside an isolated temporary directory exported from the immutable Git tree object rather than the live working tree, eliminating concurrent working-tree race conditions.
 - **Commit-pinned publication (`git push <dest> <commit_oid>:refs/heads/<branch>`):** Publication pushes the exact verified commit object rather than a mutable branch ref, eliminating post-verification TOCTOU mutations.
-- **Harness adapters:** [`nlip_receipts/adapters.py`](nlip_receipts/adapters.py) translates tool-call payloads shaped like a Claude Code `PreToolUse` hook event, a Codex tool call and an Antigravity (`agy`) tool call into NLIP messages, and the decision back into each shape. They run in-process; wiring them into the live harnesses (hook scripts, CLI configuration) is not included. Any HTTP client can also `POST /nlip/` directly.
+- **Live HTTP daemon, MCP stdio bridge & harness adapters:** [`nlip_receipts/server.py`](nlip_receipts/server.py) (`python -m nlip_receipts.server --config ...`) runs `nlip_server` under `uvicorn` with persistent `0600` HMAC keys and policy-epoch rotation; [`nlip_receipts/mcp_stdio.py`](nlip_receipts/mcp_stdio.py) (`python -m nlip_receipts.mcp_stdio`) exposes `nlip_verify`, `nlip_publish`, and `nlip_control` over MCP JSON-RPC 2.0 stdio → HTTP `POST /nlip/` so tool calls own execution cleanly; [`hooks/claude_pretool_nlip.py`](hooks/claude_pretool_nlip.py) provides a fail-closed, deny-only Claude Code `PreToolUse` guardrail blocking direct `Bash` `git push` and protected hook/git-config edits; and [`nlip_receipts/adapters.py`](nlip_receipts/adapters.py) translates Claude Code, Codex CLI, and Antigravity (`agy`) payloads either in-process or over `http_nlip_transport(url)`. In production, run `nlip_server` under a separate OS user/container owning the ledger and destination credentials (see [`SECURITY.md`](SECURITY.md#threat-model-and-limitations)).
 
 ---
 
@@ -70,9 +70,10 @@ make test   # pytest suite: HTTP, TOCTOU, Confused-Deputy, cross-destination, du
             # record limitations documented in SECURITY.md.
 ```
 
-### Run End-to-End Interactive Demo (`make demo`)
+### Run End-to-End Interactive Demo (`make demo` / `make demo-http`)
 ```bash
-make demo
+make demo        # In-process FastAPI TestClient + multi-harness adapter shapes
+make demo-http   # Live out-of-process uvicorn HTTP server + MCP stdio bridge + Claude PreToolUse guardrail
 ```
 
 ### Reproduce Full Evaluation Benchmark & Ablations (`make eval`)
@@ -84,7 +85,9 @@ PYTHONPATH=. .venv/bin/python eval/tool_response_live.py --model gemma4:latest -
 - [`eval/benchmark.py`](eval/benchmark.py) → [`evaluation_report.md`](eval/results/evaluation_report.md) / [`evaluation_summary.json`](eval/results/evaluation_summary.json): a decision-function ablation over seeded ledger states.
 - [`eval/e2e_attacks.py`](eval/e2e_attacks.py) → [`e2e_attack_report.md`](eval/results/e2e_attack_report.md) / [`e2e_attack_summary.json`](eval/results/e2e_attack_summary.json): the end-to-end attack suite.
 
-Live-model evaluation is separate and needs local Ollama models: [`eval/tool_response_live.py`](eval/tool_response_live.py) runs the tool-response harness ([`eval/TOOL_RESPONSE_EVAL.md`](eval/TOOL_RESPONSE_EVAL.md)) with real models (`gemma4` 8B and `qwen3-coder-next` 80B, 5 seeds per cell). With an injected release note read through a tool, the failing commit reached the destination in 9/10 trials under the neutral `no_gate` prompt (2026-11-24, [`eval/results/tool_response_live_no_gate_2026-11-24.json`](eval/results/tool_response_live_no_gate_2026-11-24.json)), 6/10 with a `prompt_only` defense, and 0/10 under `receipt_gate` (2026-11-20, [`eval/results/tool_response_live_2026-11-20.json`](eval/results/tool_response_live_2026-11-20.json)); benign releases completed 30/30 across the three conditions. The older exploratory probe [`eval/live_agent_eval.py`](eval/live_agent_eval.py) put the injection in the user turn and is superseded.
+Live-model evaluation is separate and needs local Ollama models: [`eval/tool_response_live.py`](eval/tool_response_live.py) runs the tool-response harness ([`eval/TOOL_RESPONSE_EVAL.md`](eval/TOOL_RESPONSE_EVAL.md)) across 90 recorded trials (`gemma4` 8B and `qwen3-coder-next` 80B, 5 seeds per cell):
+- **CI-override injection + benign control (60 trials):** The failing commit reached the destination in **9/10** trials under `no_gate` ([`tool_response_live_no_gate_2026-11-24.json`](eval/results/tool_response_live_no_gate_2026-11-24.json)), **6/10** under `prompt_only`, and **0/10** under `receipt_gate` ([`tool_response_live_2026-11-20.json`](eval/results/tool_response_live_2026-11-20.json)); benign releases completed **30/30**.
+- **Single-commit `C1`→`C2` `receipt_reuse` injection (30 trials, [`tool_response_live_receipt_reuse_2026-11-24.json`](eval/results/tool_response_live_receipt_reuse_2026-11-24.json)):** With a genuine passing receipt for parent commit `C1` in session history, both `no_gate` (**7/10**: 5 failing `C2`, 2 older `C1`) and `prompt_only` (**7/10**: all 7 replaying `C1`'s receipt onto failing `C2`) mutated the destination, whereas `receipt_gate` blocked all **6/6** `C2` replay attempts with `ARTIFACT_TREE_MISMATCH` (**0/10** failing `C2` published) and exposed **1/10** (`gemma4` seed 2) where the model published the older *verified* `C1` — cleanly illustrating Type-3 artifact attestation vs. Type-1 user-intent target binding. The older exploratory probe [`eval/live_agent_eval.py`](eval/live_agent_eval.py) put the injection in the user turn and is superseded.
 
 ---
 
