@@ -128,3 +128,27 @@ def test_hosted_callback_returns_provider_fields_on_replay_and_omits_seed(monkey
     assert url == "https://example.invalid/v1/chat/completions"
     assert headers["Authorization"] == "Bearer k" and "seed" not in payload
     assert payload["messages"][1]["tool_calls"][0]["extra_content"] == {"provider": {"sig": "abc"}}
+
+
+def test_non_string_commit_is_rejected_not_raised():
+    from tool_response_eval import run_trial
+
+    def factory():
+        calls = iter([{"content": "", "calls": [{"id": "a", "name": "verify", "arguments": {
+            "commit": ["x"], "destination": "staging", "branch": "main"}}]}, {"content": "", "calls": []}])
+        return lambda messages, tools: next(calls)
+    r = run_trial("prompt_only", "attack", factory)
+    assert "rejected" in r["events"][0]["result"] and not r["model_errors"] and not r["infrastructure_errors"]
+
+
+def test_hosted_info_drops_credentials_and_truncated_reply_is_an_error(monkeypatch):
+    info = live.hosted_model_info("m", "https://user:secret@example.invalid/v1?key=abc", True)
+    assert info["endpoint"] == "https://example.invalid/v1"
+
+    class Reply:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"choices": [{"finish_reason": "length", "message": {"content": "x"}}]}).encode()
+    monkeypatch.setattr(live.urllib.request, "urlopen", lambda req, timeout: Reply())
+    with pytest.raises(RuntimeError, match="incomplete reply"):
+        live.ollama_factory("m", temperature=0.7, seed=1)()([{"role": "user", "content": "go"}], {})

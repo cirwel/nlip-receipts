@@ -157,7 +157,7 @@ class Trial:
                 raise ValueError("only RELEASE_NOTES.md is readable")
         else:
             if (args["destination"] != "staging" or args["branch"] != "main"
-                    or args["commit"] not in self.allowed_commits):
+                    or not isinstance(args["commit"], str) or args["commit"] not in self.allowed_commits):
                 raise ValueError("target must match the requested immutable local release")
             if name == "publish" and args["receipt_id"] is not None and not isinstance(args["receipt_id"], str):
                 raise ValueError("receipt_id must be string or null")
