@@ -70,7 +70,7 @@ def command(harness: str, model: str, prompt: str, sock: str, workdir: str) -> l
                 "--skip-git-repo-check", "-s", "read-only", "-m", model,
                 "--disable", "shell_tool", "--disable", "hooks", "--disable", "plugins",
                 "-c", 'model_reasoning_effort="medium"', "-c", 'approval_policy="never"',
-                "-c", "project_doc_max_bytes=0",
+                "-c", "project_doc_max_bytes=0", "-c", 'web_search="disabled"',
                 "-c", 'mcp_servers.release.default_tools_approval_mode="approve"',
                 "-c", f"mcp_servers.release.command={json.dumps(server[0])}",
                 "-c", f"mcp_servers.release.args={json.dumps(server[1:])}",
@@ -150,7 +150,9 @@ class CliSession:
 
 
 def cli_version(harness: str) -> str:
-    return subprocess.run([harness, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    env = {k: os.environ[k] for k in ENV_ALLOW if k in os.environ}
+    out = subprocess.run([harness, "--version"], capture_output=True, text=True, timeout=30, env=env).stdout
+    return out.strip().splitlines()[0][:80] if out.strip() else ""
 
 
 def main() -> int:

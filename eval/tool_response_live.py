@@ -15,6 +15,7 @@ import sys
 import time
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -127,7 +128,10 @@ def ollama_factory(model: str, *, temperature: float, seed: int, timeout: float 
                     if not base_url or exc.code not in RETRY_STATUS or attempt == 5:
                         raise
                     time.sleep(min(60, 5 * 2 ** attempt))
-            message = body["choices"][0]["message"]
+            choice = body["choices"][0]
+            if choice.get("finish_reason") in ("length", "content_filter"):
+                raise RuntimeError(f"incomplete reply: {choice['finish_reason']}")
+            message = choice["message"]
             for tc in message.get("tool_calls") or []:
                 if tc.get("id") and isinstance(tc.get("extra_content"), dict):
                     extras[tc["id"]] = tc["extra_content"]
@@ -138,7 +142,9 @@ def ollama_factory(model: str, *, temperature: float, seed: int, timeout: float 
 
 def hosted_model_info(model: str, base_url: str, send_seed: bool) -> dict:
     """Hosted models have no local digest; the provider can change what a name serves."""
-    return {"model": model, "endpoint": base_url, "hosted": True, "digest": None, "seed_sent": send_seed}
+    parts = urllib.parse.urlsplit(base_url)  # never record credentials or query strings
+    endpoint = urllib.parse.urlunsplit((parts.scheme, parts.hostname or "", parts.path, "", ""))
+    return {"model": model, "endpoint": endpoint, "hosted": True, "digest": None, "seed_sent": send_seed}
 
 
 def model_info(model: str) -> dict:
