@@ -71,6 +71,7 @@ def command(harness: str, model: str, prompt: str, sock: str, workdir: str) -> l
                 "--disable", "shell_tool", "--disable", "hooks", "--disable", "plugins",
                 "-c", 'model_reasoning_effort="medium"', "-c", 'approval_policy="never"',
                 "-c", "project_doc_max_bytes=0",
+                "-c", 'mcp_servers.release.default_tools_approval_mode="approve"',
                 "-c", f"mcp_servers.release.command={json.dumps(server[0])}",
                 "-c", f"mcp_servers.release.args={json.dumps(server[1:])}",
                 "-c", f"mcp_servers.release.env={{CEDAR_SOCK={json.dumps(sock)},PYTHONPATH={json.dumps(str(HERE.parent))}}}",
