@@ -13,6 +13,8 @@ import argparse
 import json
 import sys
 import time
+import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -86,18 +88,57 @@ def from_chat(message: dict) -> dict:
     return {"content": message.get("content") or "", "calls": calls}
 
 
-def ollama_factory(model: str, *, temperature: float, seed: int, timeout: float = 600.0):
+RETRY_STATUS = (429, 500, 502, 503, 504)
+
+
+def ollama_factory(model: str, *, temperature: float, seed: int, timeout: float = 600.0,
+                   base_url: str | None = None, api_key: str | None = None, send_seed: bool = True):
+    """Chat-completions callback. With `base_url` it targets a hosted OpenAI-compatible
+    endpoint instead of local Ollama; only transport failures (rate limit, 5xx) are retried,
+    with the identical request. Replies are never retried or repaired."""
+    url = f"{base_url.rstrip('/')}/chat/completions" if base_url else f"{OLLAMA}/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     def factory():
+        # Some hosted endpoints attach opaque provider fields to a tool call and require them
+        # back on replay. They are kept per trial, keyed by call id, outside the transcript.
+        extras: dict[str, dict] = {}
+
         def call(messages, tools):
-            payload = {"model": model, "messages": to_chat(messages), "tools": tool_schemas(tools),
-                       "temperature": temperature, "seed": seed, "stream": False}
-            req = urllib.request.Request(f"{OLLAMA}/v1/chat/completions", data=json.dumps(payload).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = json.loads(resp.read())
-            return from_chat(body["choices"][0]["message"])
+            chat = to_chat(messages)
+            for entry in chat:
+                for tc in entry.get("tool_calls") or []:
+                    if tc["id"] in extras:
+                        tc["extra_content"] = extras[tc["id"]]
+            payload = {"model": model, "messages": chat, "tools": tool_schemas(tools),
+                       "temperature": temperature, "stream": False}
+            if send_seed:
+                payload["seed"] = seed
+            data = json.dumps(payload).encode()
+            for attempt in range(6):
+                req = urllib.request.Request(url, data=data, headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        body = json.loads(resp.read())
+                    break
+                except urllib.error.HTTPError as exc:
+                    if not base_url or exc.code not in RETRY_STATUS or attempt == 5:
+                        raise
+                    time.sleep(min(60, 5 * 2 ** attempt))
+            message = body["choices"][0]["message"]
+            for tc in message.get("tool_calls") or []:
+                if tc.get("id") and isinstance(tc.get("extra_content"), dict):
+                    extras[tc["id"]] = tc["extra_content"]
+            return from_chat(message)
         return call
     return factory
+
+
+def hosted_model_info(model: str, base_url: str, send_seed: bool) -> dict:
+    """Hosted models have no local digest; the provider can change what a name serves."""
+    return {"model": model, "endpoint": base_url, "hosted": True, "digest": None, "seed_sent": send_seed}
 
 
 def model_info(model: str) -> dict:
@@ -120,7 +161,17 @@ def main() -> int:
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--output", type=Path, required=True, help="new JSON path; never overwrites")
+    ap.add_argument("--base-url", help="hosted OpenAI-compatible API base (ending before /chat/completions); "
+                                       "default is local Ollama")
+    ap.add_argument("--api-key-env", help="name of the environment variable holding the hosted API key")
+    ap.add_argument("--no-seed", action="store_true", help="omit the seed field (for endpoints that reject it)")
     args = ap.parse_args()
+    hosted = {}
+    if args.base_url:
+        key = os.environ.get(args.api_key_env or "")
+        if not key:
+            raise SystemExit("--base-url requires --api-key-env naming a set environment variable")
+        hosted = {"base_url": args.base_url, "api_key": key, "send_seed": not args.no_seed}
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite {args.output}")
     if not sandbox_available():
@@ -130,11 +181,11 @@ def main() -> int:
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     runs, summary = [], []
     for model in args.model:
-        info = model_info(model)
+        info = hosted_model_info(model, args.base_url, not args.no_seed) if hosted else model_info(model)
         for condition in conditions:
             for fixture in fixtures:
                 for seed in range(1, args.seeds + 1):
-                    r = run_trial(condition, fixture, ollama_factory(model, temperature=args.temperature, seed=seed))
+                    r = run_trial(condition, fixture, ollama_factory(model, temperature=args.temperature, seed=seed, **hosted))
                     r.update({"kind": "live_model_run", "model_info": info, "seed": seed,
                               "temperature": args.temperature})
                     runs.append(r)

@@ -100,3 +100,31 @@ def test_live_aborts_before_inference_without_a_sandbox(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="working verification sandbox"):
         live.main()
     assert not output.exists()
+
+
+def test_hosted_callback_returns_provider_fields_on_replay_and_omits_seed(monkeypatch):
+    sent = []
+
+    class Reply:
+        def __init__(self, body): self.body = body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps(self.body).encode()
+
+    def fake_urlopen(req, timeout):
+        sent.append((req.full_url, dict(req.header_items()), json.loads(req.data)))
+        return Reply({"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "extra_content": {"provider": {"sig": "abc"}},
+             "function": {"name": "verify", "arguments": "{}"}}]}}]})
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", fake_urlopen)
+    call = live.ollama_factory("m", temperature=0.7, seed=3, base_url="https://example.invalid/v1/",
+                               api_key="k", send_seed=False)()
+    first = call([{"role": "user", "content": "go"}], {})
+    assert first == {"content": "", "calls": [{"id": "c1", "name": "verify", "arguments": {}}]}
+    call([{"role": "user", "content": "go"}, {"role": "assistant", "response": first},
+          {"role": "tool", "call_id": "c1", "result": {"ok": True}}], {})
+    url, headers, payload = sent[1]
+    assert url == "https://example.invalid/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer k" and "seed" not in payload
+    assert payload["messages"][1]["tool_calls"][0]["extra_content"] == {"provider": {"sig": "abc"}}
