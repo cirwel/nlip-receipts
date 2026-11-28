@@ -1,8 +1,10 @@
 """Run the tool-response harness with a commercial agent CLI as the model.
 
-The CLI (Claude Code or Codex) runs non-interactively with its built-in tools disabled or
-sandboxed read-only, the operator's personal configuration excluded, and one MCP server
-(`agent_cli_mcp.py`) offering the harness's three tools. Each tool call the agent makes
+The CLI (Claude Code or Codex) runs non-interactively with its built-in tools disabled,
+user settings, hooks, plugins and instruction files not loaded, a minimal environment, and
+one MCP server (`agent_cli_mcp.py`) offering the harness's three tools. The CLI's own default
+system prompt and account context remain. A CLI that exits without making any tool call is
+recorded as a model error, not as a trial in which the model declined. Each tool call the agent makes
 becomes one harness turn: `run_trial` validates and executes it and scores destination refs
 exactly as for a local model. Differences from `tool_response_live.py`, all recorded per run:
 the harness's system text and conversation history are passed as the CLI's prompt (the CLI
@@ -16,6 +18,7 @@ import json
 import os
 import select
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -30,6 +33,8 @@ sys.path.insert(0, str(HERE))
 from tool_response_eval import ALL_FIXTURES, SYSTEM_PROMPTS, run_trial  # noqa: E402
 
 TOOL_NAMES = ("read_repo_file", "verify", "publish")
+# The agent CLI gets only what it needs to start and find its login; no tokens or keys.
+ENV_ALLOW = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL")
 
 
 def render_prompt(messages: list[dict]) -> str:
@@ -63,6 +68,7 @@ def command(harness: str, model: str, prompt: str, sock: str, workdir: str) -> l
     if harness == "codex":
         return ["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                 "--skip-git-repo-check", "-s", "read-only", "-m", model,
+                "--disable", "shell_tool", "--disable", "hooks", "--disable", "plugins",
                 "-c", 'model_reasoning_effort="medium"', "-c", 'approval_policy="never"',
                 "-c", "project_doc_max_bytes=0",
                 "-c", f"mcp_servers.release.command={json.dumps(server[0])}",
@@ -91,11 +97,10 @@ class CliSession:
             self.prompt = render_prompt(messages)
             work = os.path.join(self.dir, "work")
             os.mkdir(work)
-            env = {k: v for k, v in os.environ.items()
-                   if not k.startswith(("CLAUDE", "ANTHROPIC", "CODEX", "OPENAI", "GEMINI", "MCP_"))}
+            env = {k: os.environ[k] for k in ENV_ALLOW if k in os.environ}
             self.log = open(os.path.join(self.dir, "out.txt"), "w+")
             self.proc = subprocess.Popen(command(self.harness, self.model, self.prompt, self.sock_path, work),
-                                         cwd=work, env=env, stdin=subprocess.DEVNULL,
+                                         cwd=work, env=env, stdin=subprocess.DEVNULL, start_new_session=True,
                                          stdout=self.log, stderr=subprocess.STDOUT)
         elif self.pending is not None:
             self.pending.sendall((json.dumps(messages[-1]["result"]) + "\n").encode())
@@ -106,13 +111,17 @@ class CliSession:
             ready, _, _ = select.select([self.listener], [], [], 0.5)
             if ready:
                 conn, _ = self.listener.accept()
+                conn.settimeout(30)
                 call = json.loads(conn.makefile().readline())
+                conn.settimeout(None)
                 self.pending, self.n = conn, self.n + 1
                 return {"content": "", "calls": [{"id": f"cli-{self.n}", "name": call.get("name"),
                                                   "arguments": call.get("arguments")}]}
             if self.proc.poll() is not None:
                 if self.proc.returncode != 0:
                     raise RuntimeError(f"agent CLI exited {self.proc.returncode}")
+                if self.n == 0:
+                    raise RuntimeError("agent CLI exited without any tool call")
                 return {"content": self.output()[-4000:], "calls": []}
         raise TimeoutError("agent CLI produced no tool call or exit in time")
 
@@ -124,8 +133,11 @@ class CliSession:
     def close(self) -> dict:
         if self.pending is not None:
             self.pending.close()
-        if self.proc is not None and self.proc.poll() is None:
-            self.proc.kill()
+        if self.proc is not None:
+            try:  # the CLI and anything it started, including the tool bridge
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             self.proc.wait()
         info = {"cli_exit": self.proc.returncode if self.proc else None,
                 "cli_output_tail": self.output()[-4000:] if self.log else "", "cli_prompt": self.prompt}

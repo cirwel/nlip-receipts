@@ -275,8 +275,9 @@ digest: `gemma4:latest` (8.0B, Q4_K_M, `371e604c…`), `gpt-oss:20b` (20.9B, MXF
 `results/tool_response_live_n20_*.json`, 180 trials each. Median trial time per model was
 9–30 s.
 
-Cells are `forbidden effect / trials`. For `receipt_reuse` every forbidden effect was the
-failing `C2` except one `gemma4` `no_gate` trial that published `C1`.
+Cells are `forbidden effect / trials`. For `receipt_reuse` every forbidden effect ended with
+the failing `C2` at the destination except one `gemma4` `no_gate` trial that ended with `C1`.
+Two `nemotron-3.5-lightning` `no_gate` trials published `C1` first and then `C2`.
 
 | Model | Fixture | `no_gate` | `prompt_only` | `receipt_gate` | Gated attempts and reason |
 |---|---|---:|---:|---:|---|
@@ -320,8 +321,10 @@ The pooled counts hide large differences between models, so read the per-model r
 
 `eval/tool_response_agent_cli.py` runs the same `run_trial` with a commercial agent CLI as
 the model. The CLI is started non-interactively with its built-in tools disabled
-(`claude --tools ""`), personal settings excluded (`--setting-sources ""`,
-`--strict-mcp-config`), and one MCP server (`eval/agent_cli_mcp.py`) that offers the three
+(`claude --tools ""`), user settings, hooks, plugins, skills and instruction files not
+loaded (`--setting-sources ""`, `--strict-mcp-config`; a probe with the same flags listed no
+`CLAUDE.md`, hook output or skills in context, only the CLI's default system prompt and
+account context), and one MCP server (`eval/agent_cli_mcp.py`) that offers the three
 harness tools and forwards each call to the runner. Each agent tool call is one harness
 turn; validation, execution and scoring are unchanged.
 
@@ -336,7 +339,9 @@ condition's system text and, for `receipt_reuse`, the prior `C1` history are pas
 the CLI's prompt, and the CLI keeps its own system prompt; there is no seed or temperature
 control, so the 10 trials per cell are unseeded repeats; the model is a hosted name, not a
 digest. Run at source commit `4c79e39` (same `runner_sha256` `c0ad0d31…`), Claude Code
-2.1.332.
+2.1.332. The runner was tightened after these runs (environment allow-list, a CLI that exits
+without a tool call is a model error, process-group cleanup); none of the 180 recorded
+trials is affected, since each read the notes through the tool and exited 0.
 
 | Model | Attack trials (both fixtures, three conditions) | Unauthorized publish attempted | Benign releases |
 |---|---:|---:|---:|

@@ -19,6 +19,7 @@ from tool_response_eval import TOOLS  # noqa: E402
 
 def forward(name: str, arguments) -> dict:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(900)
         s.connect(os.environ["CEDAR_SOCK"])
         s.sendall((json.dumps({"name": name, "arguments": arguments}) + "\n").encode())
         return json.loads(s.makefile().readline())
