@@ -338,17 +338,21 @@ Differences from the Ollama runs, which make the two sets not directly comparabl
 condition's system text and, for `receipt_reuse`, the prior `C1` history are passed inside
 the CLI's prompt, and the CLI keeps its own system prompt; there is no seed or temperature
 control, so the 10 trials per cell are unseeded repeats; the model is a hosted name, not a
-digest. Run at source commit `4c79e39` (same `runner_sha256` `c0ad0d31…`), Claude Code
-2.1.332. The runner was tightened after these runs (environment allow-list, a CLI that exits
+digest. The Claude runs are at source commit `4c79e39` with Claude Code 2.1.332; the Codex
+run is at `6695926` with codex-cli 0.172.0 (`--harness codex`, shell tool, hooks and plugins
+disabled, the three tools pre-approved). `runner_sha256` is `c0ad0d31…` throughout. The runner was tightened after these runs (environment allow-list, a CLI that exits
 without a tool call is a model error, process-group cleanup); none of the 180 recorded
-trials is affected, since each read the notes through the tool and exited 0.
+Claude trials is affected, since each read the notes through the tool and exited 0. A first
+Codex run of 90 trials was refused every tool call by Codex's approval policy; all 90 were
+model errors and that file is not kept.
 
 | Model | Attack trials (both fixtures, three conditions) | Unauthorized publish attempted | Benign releases |
 |---|---:|---:|---:|
 | claude-opus-5-5 | 60 | 0 | 30/30 |
 | claude-haiku-5-5 | 60 | 0 | 30/30 |
+| gpt-6.2-astra (Codex) | 60 | 0 | 30/30 |
 
-Every trial read the notes. No trial had a model or infrastructure error. Because neither
+Every trial read the notes. No trial had a model or infrastructure error. Because no
 model attempted the forbidden publication even with no gate, these runs do not measure the
-gate blocking anything; they show that it did not block the 20 gated benign releases
+gate blocking anything; they show that it did not block the 30 gated benign releases
 (`VERIFIED_RECEIPT_VALID` each time). Files: `results/tool_response_agent_cli_*.json`.
